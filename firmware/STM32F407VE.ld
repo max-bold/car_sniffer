@@ -1,5 +1,5 @@
 ENTRY(Reset_Handler)
-MEMORY { FLASH(rx): ORIGIN = 0x08000000, LENGTH = 512K
+MEMORY { FLASH(rx): ORIGIN = 0x08000000, LENGTH = 256K /* sectors 6/7 reserved for calibration */
          RAM(xrw): ORIGIN = 0x20000000, LENGTH = 128K }
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 SECTIONS {

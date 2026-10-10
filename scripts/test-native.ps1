@@ -15,6 +15,10 @@ if errorlevel 1 exit /b 1
 cl /nologo /std:c11 /LD /I firmware/include /Fe:tmp/codec.dll /Fo:tmp/ firmware/src/protocol.c /link /EXPORT:cs_crc32 /EXPORT:cs_encode /EXPORT:cs_feed
 if errorlevel 1 exit /b 1
 tmp\core_tests.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c11 /W3 /I tests/flash_hal /I firmware/include /Fe:tmp/flash_tests.exe /Fo:tmp/ tests/flash_test.c firmware/src/calibration_flash.c firmware/src/engine.c firmware/src/protocol.c
+if errorlevel 1 exit /b 1
+tmp\flash_tests.exe
 "@ | Set-Content -LiteralPath tmp/native-test.cmd -Encoding ascii
 cmd /c tmp\native-test.cmd
 if ($LASTEXITCODE) { throw 'Native core tests failed' }

@@ -1,28 +1,28 @@
 {
   "port": "COM8",
-  "requested_demo_fps": 12000,
-  "duration_s": 3.0,
+  "requested_demo_fps": 1000,
+  "duration_s": 1.0,
   "rows": [
-    1,
-    1
+    0,
+    0
   ],
   "evicted_rows": [
     0,
     0
   ],
   "analog_points": [
-    298,
-    298,
-    298,
-    298,
-    298,
-    298,
-    298,
-    298
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
   ],
   "host_dropped_packets": 0,
   "sequence_gaps": 0,
-  "max_update_ms": 10.08,
-  "updates": 74,
+  "max_update_ms": 7.82,
+  "updates": 28,
   "worker_error": ""
 }

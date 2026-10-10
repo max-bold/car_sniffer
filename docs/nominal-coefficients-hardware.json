@@ -1,0 +1,12 @@
+{
+  "0": {
+    "samples": 42,
+    "max_formula_error_V": 1.4748206500492245e-07,
+    "version": 0
+  },
+  "1": {
+    "samples": 42,
+    "max_formula_error_V": 1.1077713168994308e-07,
+    "version": 0
+  }
+}

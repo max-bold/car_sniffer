@@ -1,5 +1,6 @@
 #include "board.h"
 #include "engine.h"
+#include "calibration_flash.h"
 #include "usb_transport.h"
 #include <string.h>
 #include <math.h>
@@ -208,6 +209,29 @@ static void command(uint8_t kind,uint32_t seq,const uint8_t *p,uint16_t n,void *
           result=engine_profile(&engine,a[0],a[1],&profile)?1:0;
           if(!result) { analog_after[a[0]]=now;memset(&engine.windows[a[0]],0,sizeof(engine.windows[a[0]])); } }
         break;
+    case CMD_LINEAR_PROFILE:
+        if(len!=14||a[0]>=8||a[1]>1) { result=1;break; }
+        { cal_profile_t profile={.version=cs_u32(a+2),.linear=1};
+          memcpy(&profile.zero,a+6,4);memcpy(&profile.gain,a+10,4);
+          result=engine_profile(&engine,a[0],a[1],&profile)?1:0;
+          if(!result) { analog_after[a[0]]=now;memset(&engine.windows[a[0]],0,sizeof(engine.windows[a[0]])); } }
+        break;
+    case CMD_SAVE_CALIBRATION:
+        if(len||engine.capture||engine.bridge) result=2;
+        else result=calibration_save(&engine)?1:0;
+        break;
+    case CMD_RELOAD_CALIBRATION:
+        if(len||engine.capture||engine.bridge) result=2;
+        else { calibration_load(&engine);memset(engine.windows,0,sizeof(engine.windows)); }
+        break;
+    case CMD_READ_COEFFICIENTS:
+        if(len) { result=1;break; }
+        { cs_coefficients_t values[16];
+          for(unsigned c=0;c<8;c++)for(unsigned r=0;r<2;r++) {
+              cs_coefficients_t *v=&values[c*2+r];v->request=request;engine_coefficients(&engine,c,r,v);emit(CS_COEFFICIENTS,v,sizeof(*v),NULL);
+          }
+          }
+        break;
     case CMD_RAW:
         if(len!=3||a[0]>=8||cs_u16(a+1)>10000) result=1;
         else { raw_channel=a[0];raw_until=now+(uint64_t)cs_u16(a+1)*1000; }break;
@@ -257,7 +281,7 @@ static void auto_poll(unsigned s,uint64_t now) {
     else { can_config(s,rates[auto_index[s]],0);auto_deadline[s]=now+300000;cs_auto_t v={now,(uint8_t)s,0,engine.rate[s]};emit(CS_AUTO,&v,sizeof(v),NULL); }
 }
 int main(void) {
-    HAL_Init();clock_init();io_init();time_init();engine_init(&engine,emit,NULL);
+    HAL_Init();clock_init();io_init();time_init();engine_init(&engine,emit,NULL);calibration_load(&engine);
     __HAL_RCC_RNG_CLK_ENABLE();RNG_HandleTypeDef rng={.Instance=RNG};check(HAL_RNG_Init(&rng));check(HAL_RNG_GenerateRandomNumber(&rng,&boot_id));HAL_RNG_DeInit(&rng);
     can_config(0,500000,0);can_config(1,500000,0);adc_init();usb_init();uint64_t status_at=0;
     for(unsigned c=0;c<8;c++)engine.settle_until[c]=micros()+BOARD_SETTLING_US;

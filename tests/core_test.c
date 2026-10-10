@@ -46,5 +46,25 @@ int main(void) {
     engine_range(&e,0,1,10000,20000);
     for(unsigned i=0;i<16;i++) { uint16_t raw[8]={i?1000:4095};engine_analog(&e,raw,10000+i*625); }
     assert((analog.quality&(Q_CLIP|Q_SETTLE))==(Q_CLIP|Q_SETTLE)&&isnan(analog.volts));
-    puts("C core: parser, bidirectional bridge, RTR/IDE, duplicate RX, stop/disconnect independence, queue overflow/expiry, nonlinear ADC and settling OK");return 0;
+    /* Defaults match the biased 100k/47k/10k network, in both modes. */
+    for(unsigned r=0;r<2;r++) {
+        memset(e.profiles,0,sizeof(e.profiles));engine_range(&e,0,r,0,0);
+        float ratio=r?6.17f:1.47f;
+        for(unsigned n=0;n<2;n++) {
+            float input=n?2.f:0.f;uint16_t value=(uint16_t)roundf((input+1.551f)/ratio/3.3f*4095.f);
+            for(unsigned i=0;i<16;i++) { uint16_t raw[8]={value};engine_analog(&e,raw,30000+i*625); }
+            assert(fabsf(analog.volts-input)<ratio*3.3f/4095.f&&analog.quality&Q_UNCAL);
+        }
+    }
+    cal_profile_t linear={.version=8,.linear=1,.zero=300.25f,.gain=.004f};
+    assert(!engine_profile(&e,0,1,&linear));engine_range(&e,0,1,0,0);
+    for(unsigned i=0;i<16;i++){uint16_t raw[8]={i&1?301:300};engine_analog(&e,raw,50000+i*625);}
+    assert(fabsf(analog.volts-.001f)<.000001f&&!(analog.quality&Q_UNCAL)&&analog.version==8);
+    cs_coefficients_t coefficients={.request=17};engine_coefficients(&e,0,1,&coefficients);
+    assert(coefficients.request==17&&coefficients.source==1&&coefficients.version==8);
+    assert(fabsf(coefficients.a-.004f)<1e-7f&&fabsf(coefficients.b+1.201f)<1e-6f);
+    memset(e.profiles,0,sizeof(e.profiles));engine_coefficients(&e,0,0,&coefficients);
+    assert(coefficients.source==0&&coefficients.version==0&&fabsf(coefficients.a*4095.f/3.3f-1.47f)<1e-6f);
+    linear.gain=NAN;assert(engine_profile(&e,0,1,&linear));
+    puts("C core: bridge, codec, ADC tables, nominal biased inputs and linear zero/gain OK");return 0;
 }

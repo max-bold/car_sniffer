@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from desktop.calibration import Profile,ProfileStore,dc_point,sine_profile
+from desktop.calibration import LinearProfile,linear_profile,profile_command
 
 def test_profiles_and_no_extrapolation(tmp_path):
     p=Profile(1,1,1,[[100,0],[1000,2],[3000,14]]).validate()
@@ -43,3 +44,18 @@ def test_sample_transform_precedes_average():
     values,_=p.convert([500,1500])
     center,_=p.convert([1000])
     assert values.mean()==1.25 and center[0]==1
+
+def test_linear_offset_gain_and_device_report(tmp_path):
+    import struct
+    from desktop.protocol import Command
+    p=linear_profile(3,1,[300,301]*800,[2300,2301]*800,10.02,42)
+    assert p.zero==300.5 and p.gain==10.02/2000
+    values,outside=p.convert([299.5,300.5,2300.5,3300.5])
+    assert np.allclose(values,[-p.gain,0,10.02,15.03]) and not outside.any()
+    command,payload=profile_command(p)
+    assert command==Command.LINEAR_PROFILE
+    ch,r,version,zero,gain=struct.unpack('<BBIff',payload)
+    assert (ch,r,version,zero)==(3,1,42,300.5) and abs(gain-p.gain)<1e-8
+    store=ProfileStore(tmp_path/'report.json');store.save('board',[p]);assert store.load('board')==[p]
+    with pytest.raises(ValueError):linear_profile(0,0,[0]*160,[2000]*160,2)
+    with pytest.raises(ValueError):linear_profile(0,0,[300]*160,[350]*160,2)

@@ -9,7 +9,7 @@ uint32_t cs_crc32(const uint8_t *p,size_t n) {
     return ~c;
 }
 size_t cs_encode(uint8_t *dst,uint8_t kind,uint32_t seq,const void *payload,uint16_t len) {
-    if(len>CS_MAX_PAYLOAD || kind<1 || kind>9) return 0;
+    if(len>CS_MAX_PAYLOAD || kind<1 || kind>10) return 0;
     dst[0]='C'; dst[1]='S'; dst[2]=1; dst[3]=kind; dst[4]=(uint8_t)len; dst[5]=(uint8_t)(len>>8);
     put32(dst+6,seq); if(len) memcpy(dst+10,payload,len); put32(dst+10+len,cs_crc32(dst,10+len)); return 14+len;
 }
@@ -22,7 +22,7 @@ void cs_feed(cs_parser_t *p,const uint8_t *src,size_t n,cs_packet_fn cb,void *ct
             uint8_t *b=p->buffer;
             if(b[0]!='C'||b[1]!='S') { discard(p,1); continue; }
             uint16_t len=cs_u16(b+4);
-            if(b[2]!=1||b[3]<1||b[3]>9||len>CS_MAX_PAYLOAD) { p->bad_header++; discard(p,1); continue; }
+            if(b[2]!=1||b[3]<1||b[3]>10||len>CS_MAX_PAYLOAD) { p->bad_header++; discard(p,1); continue; }
             unsigned total=14u+len;
             if(p->used<total) break;
             if(cs_crc32(b,total-4)!=cs_u32(b+total-4)) { p->bad_crc++; discard(p,1); continue; }

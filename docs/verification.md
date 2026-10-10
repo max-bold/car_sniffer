@@ -24,11 +24,19 @@ Demo GUI load runs offer12,000 frames/s across both tables plus8 analog streams.
 
 ## Build only / still requires a bench
 
-- ARM GCC/CMake/Ninja build succeeds for F407VE; Flash512 KiB, SRAM128 KiB, no DMA CCM use. Current build is about31 KiB Flash,76 KiB reserved SRAM including heap/stack.
+- ARM GCC/CMake/Ninja build succeeds for F407VE; application Flash256 KiB plus two reserved128 KiB calibration slots, SRAM128 KiB, no DMA CCM use. Current build is about33 KiB Flash,79 KiB reserved SRAM including heap/stack.
 - Desktop runs from source in `.venv`. EXE packaging was stopped at the owner's request; it is not a supported or verified delivery artifact. A diagnostic console bundle ran, but the windowed bundle did not pass its startup check.
 - Real two-segment bridge delivery, arbitration under load, no-ACK and bus-off recovery, directional fault containment while USB is disconnected, silent Auto on known/unsupported active bitrates: implemented but **not hardware validated** without external CAN nodes/transceivers.
 - HAL mailbox, error and recovery paths are compiled; native engine tests do not simulate bxCAN registers or prove these physical scenarios.
 - Electrical input safety, D1/D2 model, ADC accuracy, source settling and physical sine calibration remain unverified. Do not apply15 V during reset/Hi-Z startup.
 - CubeMX generation has not been used or verified; the project does not depend on it. No vehicle tests or automotive qualification.
 
-The board is left with bridge off, both CAN controllers silent, capture stopped, range control low (nominal1:5). Disconnect/reconnect may reset MCU and creates a new boot/time session. The external divider still defaults to unity during MCU reset despite its running firmware setting.
+At the end of the earlier hardware checks, the board was left with bridge off, both CAN controllers silent, capture stopped, range control low (nominal1:5). Disconnect/reconnect may reset MCU and creates a new boot/time session. The external divider still defaults to unity during MCU reset despite its running firmware setting.
+
+## Revised input and standalone wizard
+
+New sources implement nominal100k/47k/10k bias compensation, linear zero/gain, commands10–12 and dual-slot Flash persistence. Native tests cover nominal modes, fractional zero, CRC corruption and interruption before every programmed Flash word. Wizard tests cover all three steps, sixteen profiles and acknowledged persistence. These are simulated Flash/input tests, not physical calibration or board power-cut validation. Earlier hardware JSON reports predate these changes.
+
+Latest source verification:15 Python tests pass, native engine/Flash simulations pass, ARM build33848 bytes application Flash and80872 bytes reserved SRAM. The revised firmware was programmed and readback-verified after the owner confirmed all analog inputs were floating. Repeated hardware smoke passed: eight100 Hz channels, both silent loopbacks, no observed CRC failures/gaps. Both range formulas were checked against streamed raw means (version0/FACTORY_DEFAULTS), with error below0.1 mV; see `nominal-coefficients-hardware.json`. This verifies arithmetic, not physical input accuracy. Final capture/bridge off, CAN silent, all ranges divided. Hardware Flash calibration persistence remains untested; no measured profiles were written.
+
+Coefficient query/UI update: revised firmware programmed with readback verification. The standalone wizard read all16 factory-default coefficient sets over COM8 (no CRC failures/sequence gaps); see `coefficients-readback-hardware.json` and `calibration-current.png`. Main GUI real-device smoke rendered all8 streams with zero CAN rows when only service events were present. New C/Python codec vectors include kind10; wizard handles response-before-data ordering and rereads profiles after saves.

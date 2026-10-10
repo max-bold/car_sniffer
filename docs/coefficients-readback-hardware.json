@@ -1,0 +1,15 @@
+{
+  "port": "COM8",
+  "profiles": 16,
+  "source": "factory defaults",
+  "div_off": {
+    "a": 1.47,
+    "b": -1.551
+  },
+  "div_on": {
+    "a": 6.17,
+    "b": -1.551
+  },
+  "crc_errors": 0,
+  "sequence_gaps": 0
+}

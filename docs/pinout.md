@@ -18,7 +18,7 @@ All wiring choices are in `firmware/include/board.h`. STM32F407VET6, LQFP100. Pi
 | AIN6 | PC0 | 15 | ADC1_IN10 | Same |
 | AIN7 | PC1 | 16 | ADC1_IN11 | Same |
 | AIN8 | PC2 | 17 | ADC1_IN12 | Same |
-| AIN1 range | PD8 | 55 | GPIO OD, FT | R2 lower end, low=1:5, released=nominal 1:1 |
+| AIN1 range | PD8 | 55 | GPIO OD, FT | R2 lower end, low=divided, released=R2 disconnected (biased input) |
 | AIN2 range | PD9 | 56 | GPIO OD, FT | Same |
 | AIN3 range | PD10 | 57 | GPIO OD, FT | Same |
 | AIN4 range | PD11 | 58 | GPIO OD, FT | Same |
@@ -32,7 +32,7 @@ PB8/PB12 are FT digital inputs in the selected AF, not analog inputs. STM32 inte
 
 NXP TJA1050 TXD thresholds are VIH >=2.0 V and VIL <=0.8 V, compatible with 3.3 V STM32 GPIO at the small TXD load. TJA1050 supply must be 4.75..5.25 V. Verify actual module part and pinout; do not substitute CANH/CANL for RXD/TXD. Verify its S input is strapped for the intended mode. Silent behavior here comes from bxCAN, not an assumed module S setting.
 
-PD8..PD15 are FT open-drain, no pulls; writing zero sinks, writing one releases. The supplied R3=40k/R2=10k circuit establishes low=1:5 and Hi-Z=nominal unity. They overlap LCD signals; a fitted LCD would conflict. Low is preloaded before output enable at firmware startup. **During reset these pins are Hi-Z, so hardware does not guarantee a safe 0..15 V range.** Fixing this requires external hardware; firmware cannot remove that interval. Keep analog inputs disconnected until protection is verified. A nominal 3.3 V shunt diode does not guarantee ADC pin safety at actual current or during power loss; D1/D2 types and measurements are still required.
+PD8..PD15 are FT open-drain, no pulls; writing zero sinks, writing one releases. The revised input has R1=100k to VREF, R3=47k from AIN and R2=10k to the range GPIO. Low enables R2, Hi-Z releases it; both modes have VREF bias. See `calibration.md` for nominal zero/gain. They overlap LCD signals; a fitted LCD would conflict. Low is preloaded before output enable at firmware startup. **During reset these pins are Hi-Z, so hardware does not guarantee a safe 0..15 V range.** Fixing this requires external hardware; firmware cannot remove that interval. Keep analog inputs disconnected until protection is verified. A nominal 3.3 V shunt diode does not guarantee ADC pin safety at actual current or during power loss; D1/D2 types and measurements are still required.
 
 ## Clock and timing
 
@@ -51,7 +51,7 @@ CAN: 42 MHz / prescaler / 14 TQ; synchronization 1 TQ, BS1=11, BS2=2, SJW=1, sam
 
 ADC1 clock=21 MHz (PCLK2/4), sample time initially 480 cycles plus 12 conversion cycles: about 23.43 us per channel, 187.43 us per eight-channel scan. TIM2 TRGO at exactly 1600 Hz (84 MHz / 52500). 16 scans produce one 10 ms window, 100 points/s/channel. Channels are scanned in table order, not simultaneously; timestamps identify the common window start/scan trigger, with channel offsets of approximately rank*23.43 us, not measured sample aperture. TIM5 is a 1 MHz 32-bit counter extended to 64 bits by its update ISR.
 
-R3/R2/C1 imply approximate linear RC constants of 8 us in divided mode and 40 us in unity mode, excluding diode and ADC effects. Sample time and `BOARD_SETTLING_US=20000` are provisional hardware parameters. Verify charge settling at the actual impedance, leakage, temperature and range transition. DMA2 Stream0/Channel0 buffers are in normal SRAM, never CCM.
+Revised R1=100k/R2=10k/R3=47k/C1=1nF network: approximate RC constants 7.6 us divided and 32 us released, excluding diode/ADC effects; see `calibration.md`. Sample time and `BOARD_SETTLING_US=20000` are provisional hardware parameters. Verify charge settling at the actual impedance, leakage, temperature and range transition. DMA2 Stream0/Channel0 buffers are in normal SRAM, never CCM.
 
 ## Termination and limitations
 

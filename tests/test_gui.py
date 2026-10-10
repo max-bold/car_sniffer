@@ -31,6 +31,8 @@ def test_gui_demo_stop_clear_and_load(tmp_path,monkeypatch):
     assert all(panel.model.rowCount()>1000 for panel in w.can)
     assert all(len(points)>=50 for points in w.analog)
     assert w.last_status[5:7]==(1,1)
+    assert all(cb.text()=='DIV' and 'factory' not in label.text().lower() and 'uncalibrated' not in label.text().lower() for _,cb,label in w.channels)
+    assert not any(row['event'] for panel in w.can for row in panel.model.rows)
     w.time_window.setValue(2.5);pump(app,.15)
     left,right=w.plots[0].viewRange()[0]
     assert abs(right-left-2.5)<.01

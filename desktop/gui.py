@@ -1,5 +1,6 @@
 from collections import deque
 from pathlib import Path
+import json
 import math
 import os
 import struct
@@ -10,7 +11,6 @@ import serial.tools.list_ports
 from PySide6 import QtCore, QtGui, QtWidgets as W
 from . import protocol as p
 from .backend import DeviceWorker
-from .calibration import Profile, ProfileStore, dc_point, sine_profile
 
 EVENT_NAMES = {1:'LEC',2:'CAN state',3:'RX overflow',4:'TX queue overflow',5:'Delivery expired',6:'USB loss',
                7:'Recovery',8:'Bridge stopped',9:'Range change',10:'DMA loss',11:'Capture',12:'Loopback',13:'Reconfigure RX loss'}
@@ -186,104 +186,6 @@ class CanPanel(W.QWidget):
         if self.table.model() is not desired:self.table.setModel(desired)
         if not filtered:self.proxy.setSourceModel(None)
 
-class CalibrationDialog(W.QDialog):
-    def __init__(self, window):
-        super().__init__(window); self.window = window; self.setWindowTitle('Calibration — raw ADC and reference voltage'); self.resize(780,650)
-        self.samples = []; self.points = []; self.collecting = False
-        self.raw_start_timer=QtCore.QTimer(self);self.raw_start_timer.setSingleShot(True)
-        self.raw_start_timer.timeout.connect(self.start_raw)
-        self.raw_finish_timer=QtCore.QTimer(self);self.raw_finish_timer.setSingleShot(True);self.raw_finish_timer.timeout.connect(self.finish)
-        layout = W.QVBoxLayout(self)
-        form = W.QFormLayout(); layout.addLayout(form)
-        self.channel, self.range = W.QComboBox(), W.QComboBox(); self.channel.addItems([f'AIN {i+1}' for i in range(8)]); self.range.addItems(['0–3.3 V','0–15 V'])
-        self.reference = W.QDoubleSpinBox(); self.reference.setDecimals(5); self.reference.setRange(0,15)
-        self.duration = W.QDoubleSpinBox(); self.duration.setRange(.2,10); self.duration.setValue(2); self.duration.setSuffix(' s')
-        for name,w in [('Channel',self.channel),('Range',self.range),('Voltmeter reference, V',self.reference),('Raw collection duration',self.duration)]: form.addRow(name,w)
-        row = W.QHBoxLayout(); layout.addLayout(row)
-        for label, callback in [('Collect raw',self.collect),('Add DC point',self.add_dc),('Remove selected point',self.remove_point),('Upload and save',self.save)]:
-            b=W.QPushButton(label);b.clicked.connect(callback);row.addWidget(b)
-        self.table=W.QTableWidget(0,2);self.table.setHorizontalHeaderLabels(['Raw ADC','Reference, V']);layout.addWidget(self.table)
-        sine=W.QGroupBox('Known sine — phase fit, both branches checked'); sf=W.QFormLayout(sine);layout.addWidget(sine)
-        self.frequency=W.QDoubleSpinBox();self.frequency.setRange(.1,20);self.frequency.setValue(5)
-        self.amplitude=W.QDoubleSpinBox();self.amplitude.setRange(.01,15);self.amplitude.setValue(1)
-        self.definition=W.QComboBox();self.definition.addItems(['peak','peak-to-peak','RMS'])
-        self.offset=W.QDoubleSpinBox();self.offset.setRange(0,15);self.offset.setValue(1.5)
-        sr=W.QHBoxLayout()
-        for w in (self.frequency,self.amplitude,self.definition,self.offset):sr.addWidget(w)
-        sf.addRow('Hz / amplitude / definition / DC offset, V',sr)
-        fit=W.QPushButton('Identify monotonic sine table');fit.clicked.connect(self.fit_sine);sf.addRow(fit)
-        self.plot=pg.PlotWidget();layout.addWidget(self.plot)
-        self.info=W.QLabel('Use a stable source and external voltmeter. Raw stream is limited to one channel, 1600 samples/s, 10 s.');self.info.setWordWrap(True);layout.addWidget(self.info)
-        self.channel.currentIndexChanged.connect(self.load_profile);self.range.currentIndexChanged.connect(self.load_profile)
-        self.load_profile()
-
-    def load_profile(self):
-        self.collecting=False;self.samples=[]
-        p_=self.window.profiles.get((self.channel.currentIndex(),self.range.currentIndex()))
-        self.points=list(p_.points) if p_ else [];self.redraw()
-
-    def redraw(self):
-        self.table.setRowCount(len(self.points))
-        for i,point in enumerate(self.points):
-            for j,value in enumerate(point):self.table.setItem(i,j,W.QTableWidgetItem(f'{value:.5f}'))
-        self.plot.clear()
-        if self.points:
-            a=np.array(self.points);self.plot.plot(a[:,0],a[:,1],symbol='o',pen='#55c8ed')
-            self.info.setText(f'Calibrated interval: raw {a[0,0]:.1f}…{a[-1,0]:.1f}; {a[0,1]:.4f}…{a[-1,1]:.4f} V. No extrapolation.')
-
-    def collect(self):
-        if not self.window.worker or not self.window.device_id:
-            self.info.setText('Connect a device first');return
-        ch,r=self.channel.currentIndex(),self.range.currentIndex();self.samples=[];self.collecting=True
-        self.channel.setEnabled(False);self.range.setEnabled(False);self.duration.setEnabled(False)
-        self.window.channels[ch][1].setChecked(bool(r))
-        self.window.send(p.Command.CHANNEL,bytes([ch,1,r]))
-        # Allow switching transient to settle before raw session.
-        duration=round(self.duration.value()*1000)
-        self.raw_arguments=struct.pack('<BH',ch,duration)
-        self.raw_start_timer.start(100);self.raw_finish_timer.start(duration+200)
-        self.info.setText('Collecting raw samples…')
-
-    def start_raw(self):
-        self.window.send(p.Command.RAW,self.raw_arguments)
-
-    def closeEvent(self,event):
-        self.raw_start_timer.stop();self.raw_finish_timer.stop()
-        if self.collecting:self.window.send(p.Command.RAW,struct.pack('<BH',self.channel.currentIndex(),0))
-        self.collecting=False;event.accept()
-
-    def finish(self):
-        self.collecting=False
-        self.channel.setEnabled(True);self.range.setEnabled(True);self.duration.setEnabled(True)
-        if self.samples:
-            a=np.array([v[3] for v in self.samples]);self.info.setText(f'{len(a)} samples; mean {a.mean():.3f}; std {a.std():.3f}; min/max {a.min():.0f}/{a.max():.0f}; clipping {bool(a.min()<=2 or a.max()>=4093)}')
-
-    def add_dc(self):
-        try:
-            self.points.append(dc_point([v[3] for v in self.samples],self.reference.value()));self.points.sort();self.redraw()
-        except ValueError as exc:self.info.setText(str(exc))
-
-    def remove_point(self):
-        row=self.table.currentRow()
-        if row>=0:del self.points[row];self.redraw()
-
-    def fit_sine(self):
-        try:
-            profile=sine_profile([v[0] for v in self.samples],[v[3] for v in self.samples],self.frequency.value(),self.amplitude.value(),self.definition.currentText(),self.offset.value(),self.channel.currentIndex(),self.range.currentIndex())
-            self.points=profile.points;self.redraw()
-        except ValueError as exc:self.info.setText(str(exc))
-
-    def save(self):
-        try:
-            ch,r=self.channel.currentIndex(),self.range.currentIndex();old=self.window.profiles.get((ch,r))
-            points=[[float(self.table.item(i,0).text()),float(self.table.item(i,1).text())] for i in range(self.table.rowCount())]
-            profile=Profile(ch,r,old.version+1 if old else 1,points).validate()
-            # Firmware stores raw breakpoints as uint16; validate again after rounding.
-            profile.points=[[round(raw),volts] for raw,volts in profile.points];profile.validate()
-            self.window.upload_profile(profile,save=True)
-            self.info.setText('Upload requested; profile is saved only after device acknowledgement.')
-        except (ValueError,AttributeError) as exc:self.info.setText(str(exc))
-
 class AnalogViewBox(pg.ViewBox):
     def wheelEvent(self,event,axis=None):
         # AxisItem explicitly supplies X/Y; the plot surface defaults to voltage.
@@ -315,8 +217,8 @@ class MainWindow(W.QMainWindow):
         W.QApplication.instance().setFont(QtGui.QFont('Segoe UI',9))
         pg.setConfigOptions(background='#151c24',foreground='#c8d3df',antialias=False)
         self.setWindowTitle('Car Sniffer | CAN A / CAN B + 8 analog inputs');self.resize(1700,1000)
-        self.worker=None;self.demo_fps=demo_fps;self.device_id=None;self.boot=None;self.profiles={};self.profile_pending={}
-        self.calibration=None;self.last_status=None;self.pending={};self.host_cleared_t=0;self.update_count=0;self.max_update_ms=0
+        self.worker=None;self.demo_fps=demo_fps;self.device_id=None;self.boot=None
+        self.last_status=None;self.pending={};self.host_cleared_t=0;self.update_count=0;self.max_update_ms=0
         self.analog=[deque(maxlen=6000) for _ in range(8)];self.analog_evicted=0
         self.time_span=20.0
         container=W.QWidget();self.setCentralWidget(container);layout=W.QVBoxLayout(container);layout.setContentsMargins(6,6,6,6)
@@ -342,7 +244,6 @@ class MainWindow(W.QMainWindow):
         self.bridge=W.QCheckBox('Bridge');self.bridge.toggled.connect(lambda v:self.send(p.Command.BRIDGE,bytes([v])));toolbar.addWidget(self.bridge)
         self.capture=W.QPushButton('Start capture');self.capture.setObjectName('captureButton');self.capture.clicked.connect(self.toggle_capture);toolbar.addWidget(self.capture)
         b=W.QPushButton('Clear results');b.clicked.connect(self.clear_results);toolbar.addWidget(b)
-        b=W.QPushButton('Calibration…');b.clicked.connect(self.open_calibration);toolbar.addWidget(b)
         toolbar.addWidget(W.QLabel('Time window'))
         self.time_window=W.QDoubleSpinBox();self.time_window.setRange(.1,60);self.time_window.setDecimals(2)
         self.time_window.setSuffix(' s');self.time_window.setValue(self.time_span)
@@ -354,8 +255,8 @@ class MainWindow(W.QMainWindow):
             controls=W.QWidget();controls.setObjectName('channelControls');row=W.QVBoxLayout(controls);row.setContentsMargins(3,2,3,2);row.setSpacing(2)
             controls.setFixedWidth(112)
             en=W.QCheckBox(f'AIN {ch+1}');en.setChecked(True)
-            cb=W.QCheckBox('0–15 V');cb.setChecked(True);cb.setToolTip('Checked: 0–15 V (1:5). Unchecked: 0–3.3 V (unity).')
-            label=W.QLabel('— V\nuncalibrated');label.setObjectName('channelValue');label.setWordWrap(True)
+            cb=W.QCheckBox('DIV');cb.setChecked(True);cb.setToolTip('Checked: 0–15 V (divider enabled). Unchecked: 0–3.3 V (divider released).')
+            label=W.QLabel('— V');label.setObjectName('channelValue');label.setWordWrap(True)
             for w in (en,cb,label):row.addWidget(w)
             row.addStretch();self.channels.append((en,cb,label))
             en.toggled.connect(lambda v,c=ch:self.channel_change(c));cb.toggled.connect(lambda v,c=ch:self.channel_change(c))
@@ -376,7 +277,7 @@ class MainWindow(W.QMainWindow):
         self.content_splitter.setStretchFactor(0,1);self.content_splitter.setStretchFactor(1,1)
         self.content_splitter.setSizes([750,750])
         self.status=W.QLabel('Disconnected');self.status.setWordWrap(True)
-        self.notice=W.QLabel('Apply both bitrates before enabling bridge. Range control defaults low (1:5); reset is Hi-Z.');self.notice.setWordWrap(True);self.notice.setObjectName('notice')
+        self.notice=W.QLabel('Apply both bitrates before enabling bridge. Range control defaults low (divided); reset is Hi-Z.');self.notice.setWordWrap(True);self.notice.setObjectName('notice')
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().setFixedHeight(48)
         status_widget=W.QWidget();status_layout=W.QVBoxLayout(status_widget);status_layout.setContentsMargins(3,0,3,0);status_layout.setSpacing(0)
@@ -417,7 +318,7 @@ class MainWindow(W.QMainWindow):
     def toggle_connection(self):
         if self.worker:
             self.worker.close();self.worker=None;self.connect_button.setText('Connect');self.device_id=None;self.last_status=None;return
-        self.boot=None;self.device_id=None;self.profiles={};self.pending.clear();self.profile_pending.clear()
+        self.boot=None;self.device_id=None;self.pending.clear()
         self.worker=DeviceWorker(self.port.currentData(),self.demo_fps);self.worker.start();self.connect_button.setText('Disconnect')
         QtCore.QTimer.singleShot(200,lambda:self.send(p.Command.STATUS))
 
@@ -436,8 +337,7 @@ class MainWindow(W.QMainWindow):
         if not self.device_id:return
         settings={'channels':[{'enabled':en.isChecked(),'range':int(cb.isChecked())} for en,cb,_ in self.channels],
                   'rates':[cb.currentData() for cb in self.rates]}
-        try:self.store().save_settings(self.device_id,settings)
-        except (ValueError,OSError) as exc:self.notice.setText(str(exc))
+        QtCore.QSettings('CarSniffer','Desktop').setValue(self.device_id,json.dumps(settings))
 
     def apply_bitrate(self,side):
         self.send(p.Command.CAN_CONFIG,struct.pack('<BI',side,self.rates[side].currentData()));self.save_settings()
@@ -447,29 +347,15 @@ class MainWindow(W.QMainWindow):
         for points in self.analog:points.clear()
         self.analog_evicted=0
         for curve in self.curves:curve.setData([],[])
-        # Clear is display-only. Preserve pending responses and calibration traffic.
-
-    def store(self):
-        base=Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'CarSniffer'
-        return ProfileStore(base / f'calibration-{self.device_id}.json')
-
-    def upload_profile(self,profile,save=False):
-        payload=struct.pack('<BBIB',profile.channel,profile.range,profile.version,len(profile.points))+b''.join(struct.pack('<Hf',int(raw),volts) for raw,volts in profile.points)
-        request=self.send(p.Command.PROFILE,payload)
-        if request is not None:self.profile_pending[request]=(profile,save)
-
-    def open_calibration(self):
-        self.calibration=CalibrationDialog(self);self.calibration.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose);self.calibration.destroyed.connect(lambda:self.clear_calibration());self.calibration.show()
-
-    def clear_calibration(self):self.calibration=None
+        # Clear is display-only. Preserve pending control responses.
 
     def handle_status(self,values):
         t,boot,loss,generation,uid,bridge,capture,mode_a,mode_b,rate_a,rate_b,*counters=values
         if boot!=self.boot:
             if self.boot is not None:self.notice.setText('MCU reset: new boot ID; capture results cleared for a new time axis')
-            self.clear_results();self.boot=boot;self.device_id=uid.hex();self.profiles={};self.profile_pending.clear()
-            try:saved=self.store().settings(self.device_id)
-            except (ValueError,OSError) as exc:saved={};self.notice.setText(str(exc))
+            self.clear_results();self.boot=boot;self.device_id=uid.hex()
+            try:saved=json.loads(QtCore.QSettings('CarSniffer','Desktop').value(self.device_id,'{}'))
+            except (ValueError,TypeError):saved={}
             for side,rate in enumerate(saved.get('rates',[500000,500000])):
                 self.rates[side].setCurrentIndex(self.rates[side].findData(rate))
             for ch,(en,cb,_) in enumerate(self.channels):
@@ -478,9 +364,6 @@ class MainWindow(W.QMainWindow):
                 en.blockSignals(True);cb.blockSignals(True);en.setChecked(enabled);cb.setChecked(bool(range_));en.blockSignals(False);cb.blockSignals(False)
                 self.plots[ch].setYRange(0,(3.3,15)[range_],padding=0)
                 self.send(p.Command.CHANNEL,bytes([ch,enabled,range_]))
-            try:
-                for profile in self.store().load(self.device_id):self.upload_profile(profile)
-            except (ValueError,OSError) as exc:self.notice.setText(str(exc))
         self.last_status=values
         self.bridge.blockSignals(True);self.bridge.setChecked(bool(bridge));self.bridge.blockSignals(False)
         self.capture.setText('Stop capture' if capture else 'Start capture')
@@ -514,7 +397,7 @@ class MainWindow(W.QMainWindow):
                 elif kind==p.Kind.EVENT:
                     for t,side,code,detail,tec,rec in p.records(p.EVENT,data):
                         name=EVENT_NAMES.get(code,f'Event {code}');description=LEC_NAMES.get(detail,str(detail)) if code==1 else str(detail)
-                        for s in ([side] if side<2 else [0,1]):rows[s].append({'frame_id':0,'event':True,'cells':[f'{t/1e6:.6f}',name,'','','',f'{description}; TEC/REC {tec}/{rec}','','','','']})
+                        for s in ([side] if side<2 and code in (1,2,3,4,5) else []):rows[s].append({'frame_id':0,'event':True,'cells':[f'{t/1e6:.6f}',name,'','','',f'{description}; TEC/REC {tec}/{rec}','','','','']})
                         if code==9:
                             ch=detail>>8
                             if ch<8 and self.analog[ch]:self.analog[ch].append((t/1e6,math.nan))
@@ -526,22 +409,14 @@ class MainWindow(W.QMainWindow):
                         if self.analog[ch] and t/1e6-self.analog[ch][-1][0]>.015:
                             self.analog[ch].append((self.analog[ch][-1][0]+.005,math.nan))
                         self.analog[ch].append((t/1e6,math.nan if invalid else volts))
-                        flags=[flag.name.lower() for flag in p.Quality if flag & q]
-                        self.channels[ch][2].setText(f'{volts:.4f} V\n'+(', '.join(flags) if flags else f'cal v{version}'))
-                elif kind==p.Kind.RAW:
-                    if self.calibration and self.calibration.collecting:
-                        for value in p.records(p.RAW,data):
-                            if value[1]==self.calibration.channel.currentIndex() and value[2]==self.calibration.range.currentIndex() and len(self.calibration.samples)<16000:self.calibration.samples.append(value)
+                        flags=[flag.name.lower() for flag in (p.Quality.CLIPPING,p.Quality.SETTLING,p.Quality.OUT_OF_RANGE,p.Quality.DMA_LOSS) if flag & q]
+                        self.channels[ch][2].setText(f'{volts:.4f} V\n'+(', '.join(flags) if flags else 'OK'))
                 elif kind==p.Kind.AUTO:
                     for t,side,stage,rate in p.records(p.AUTO,data):self.notice.setText(f'CAN {"AB"[side]} Auto: '+(f'trying {rate/1000:g} kbit/s' if stage==0 else f'found {rate/1000:g} kbit/s' if stage==1 else 'not determined — no valid traffic; check bitrate, wiring and ACK from another node'))
                 elif kind==p.Kind.RESPONSE:
                     if len(data)!=14:raise ValueError('Malformed response')
                     request,command,result,t=struct.unpack('<IBBQ',data);self.pending.pop(request,None)
-                    profile=self.profile_pending.pop(request,None)
                     if result:self.notice.setText(f'Command {p.Command(command).name} rejected (code {result})')
-                    elif profile:
-                        value,save=profile;self.profiles[value.channel,value.range]=value
-                        if save:self.store().save(self.device_id,list(self.profiles.values()));self.notice.setText('Calibration acknowledged and saved for this device')
             for s in range(2):self.can[s].model.append(rows[s])
             for t,fid,side,state,ack in tx:
                 if side<2:self.can[side^1].model.update_tx(fid,state,ack)
@@ -554,7 +429,7 @@ class MainWindow(W.QMainWindow):
             if latest and self.last_status and self.last_status[6]:
                 self.plots[0].setXRange(latest-self.time_span,latest,padding=0)
             for request,(command,sent) in list(self.pending.items()):
-                if time.monotonic()-sent>3:self.pending.pop(request);self.notice.setText(f'Command {command.name} timed out');self.profile_pending.pop(request,None)
+                if time.monotonic()-sent>3:self.pending.pop(request);self.notice.setText(f'Command {command.name} timed out')
         except (ValueError,struct.error,OSError) as exc:self.notice.setText(str(exc))
         self.max_update_ms=max(self.max_update_ms,(time.perf_counter()-start)*1000)
 

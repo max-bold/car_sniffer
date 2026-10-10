@@ -51,15 +51,31 @@ int engine_take(engine_t *e,unsigned dst,uint64_t now,forward_t *out) {
     return 0;
 }
 int engine_profile(engine_t *e,unsigned ch,unsigned range,const cal_profile_t *p) {
-    if(ch>=8||range>1||p->count<2||p->count>PROFILE_POINTS||!p->version) return -1;
+    if(ch>=8||range>1||!p->version) return -1;
+    if(p->linear) {
+        if(p->linear!=1||!isfinite(p->zero)||p->zero<=2||p->zero>=4093||!isfinite(p->gain)||p->gain<=0||p->gain>.1f) return -1;
+        e->profiles[ch][range]=*p; return 0;
+    }
+    if(p->count<2||p->count>PROFILE_POINTS) return -1;
     for(unsigned i=0;i<p->count;i++) {
         if(p->points[i].raw>4095||!isfinite(p->points[i].volts)||p->points[i].volts<0||p->points[i].volts>(range?15.f:3.3f)) return -1;
         if(i&&(p->points[i].raw<p->points[i-1].raw+2||p->points[i].volts<=p->points[i-1].volts)) return -1;
     }
     e->profiles[ch][range]=*p; return 0;
 }
+void engine_coefficients(const engine_t *e,unsigned ch,unsigned range,cs_coefficients_t *out) {
+    const cal_profile_t *p=&e->profiles[ch][range];
+    out->channel=ch;out->range=range;out->version=p->version;
+    if(p->linear) { out->source=1;out->a=p->gain;out->b=-p->zero*p->gain; }
+    else if(p->count) { out->source=2;out->a=NAN;out->b=NAN; }
+    else { out->source=0;out->a=(3.3f/4095.f)*(range?6.17f:1.47f);out->b=-3.3f*.47f; }
+}
 static float convert(const cal_profile_t *p,uint16_t raw,unsigned range,uint16_t *q) {
-    if(!p->count) { *q|=Q_UNCAL; return raw*(3.3f/4095.f)*(range?5.f:1.f); }
+    if(p->linear) return (raw-p->zero)*p->gain;
+    /* R1=100k to VREF, R3=47k to input; R2=10k to GND when OD low.
+     * Vin = Vadc*(1+R3/R1+[R3/R2]) - VREF*(R3/R1).
+     * Assume VREF=VDDA=3.3 V until measured calibration replaces this model. */
+    if(!p->count) { *q|=Q_UNCAL; return raw*(3.3f/4095.f)*(range?6.17f:1.47f)-3.3f*.47f; }
     if(raw<p->points[0].raw||raw>p->points[p->count-1].raw) { *q|=Q_OUTSIDE|Q_UNCAL; return NAN; }
     for(unsigned i=1;i<p->count;i++) if(raw<=p->points[i].raw) {
         cal_point_t a=p->points[i-1],b=p->points[i]; return a.volts+(b.volts-a.volts)*(raw-a.raw)/(b.raw-a.raw);

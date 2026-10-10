@@ -2,7 +2,42 @@
 from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
+import struct
 import numpy as np
+
+@dataclass
+class LinearProfile:
+    channel: int
+    range: int
+    version: int
+    zero: float
+    gain: float
+    model: str = 'linear'
+
+    def validate(self):
+        if not 0<=self.channel<8 or self.range not in (0,1) or not 1<=self.version<=0xffffffff:
+            raise ValueError('Invalid channel, range or version')
+        if self.model!='linear' or not np.isfinite([self.zero,self.gain]).all() or not 2<self.zero<4093 or not 0<self.gain<=.1:
+            raise ValueError('Invalid zero or gain')
+        return self
+
+    def convert(self,raw):
+        self.validate();a=np.asarray(raw,dtype=float)
+        return (a-self.zero)*self.gain,(a<0)|(a>4095)
+
+def linear_profile(channel,range_,zero_raw,reference_raw,reference_volts,version=1):
+    zero=dc_point(zero_raw,0)[0]
+    high=dc_point(reference_raw,reference_volts)[0]
+    if not 0<reference_volts<=(3.3,15)[range_] or high-zero<100:
+        raise ValueError('Reference voltage or ADC span is too small/invalid')
+    return LinearProfile(channel,range_,version,zero,reference_volts/(high-zero)).validate()
+
+def profile_command(profile):
+    from .protocol import Command
+    profile.validate()
+    if isinstance(profile,LinearProfile):
+        return Command.LINEAR_PROFILE,struct.pack('<BBIff',profile.channel,profile.range,profile.version,profile.zero,profile.gain)
+    return Command.PROFILE,struct.pack('<BBIB',profile.channel,profile.range,profile.version,len(profile.points))+b''.join(struct.pack('<Hf',int(raw),v) for raw,v in profile.points)
 
 @dataclass
 class Profile:
@@ -144,7 +179,7 @@ class ProfileStore:
         d = self._read(device_id)
         if not isinstance(d.get('profiles'),list) or len(d['profiles'])>16:
             raise ValueError('Invalid profile list')
-        try:profiles = [Profile(**p).validate() for p in d['profiles']]
+        try:profiles = [(LinearProfile(**p) if p.get('model')=='linear' else Profile(**p)).validate() for p in d['profiles']]
         except (TypeError,KeyError,OverflowError) as exc:raise ValueError('Invalid profile data') from exc
         if len({(p.channel, p.range) for p in profiles}) != len(profiles):
             raise ValueError('Duplicate profile')

@@ -20,7 +20,7 @@ def test_c_python_codec_vectors():
     stream=bytearray()
     expected=[]
     for seq in range(60):
-        data=rng.randbytes(seq*13%1025);kind=1+seq%9
+        data=rng.randbytes(seq*13%1025);kind=1+seq%10
         length=lib.cs_encode(out,kind,seq,data,len(data))
         assert out.raw[:length]==p.encode(kind,seq,data)
         stream.extend(out.raw[:length]);expected.append((kind,seq,data))

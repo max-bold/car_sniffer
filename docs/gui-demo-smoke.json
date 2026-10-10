@@ -3,26 +3,26 @@
   "requested_demo_fps": 1000,
   "duration_s": 1.0,
   "rows": [
-    511,
-    511
+    504,
+    505
   ],
   "evicted_rows": [
     0,
     0
   ],
   "analog_points": [
-    102,
-    102,
-    102,
-    102,
-    102,
-    102,
-    102,
-    102
+    101,
+    101,
+    101,
+    101,
+    101,
+    101,
+    101,
+    101
   ],
   "host_dropped_packets": 0,
   "sequence_gaps": 0,
-  "max_update_ms": 7.51,
-  "updates": 19,
+  "max_update_ms": 8.95,
+  "updates": 21,
   "worker_error": ""
 }

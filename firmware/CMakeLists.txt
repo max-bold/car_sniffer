@@ -12,7 +12,7 @@ set(HAL_MODULES hal hal_rcc hal_rcc_ex hal_gpio hal_cortex hal_dma hal_flash hal
 foreach(M IN LISTS HAL_MODULES)
   list(APPEND HAL_SOURCES ${HAL}/Src/stm32f4xx_${M}.c)
 endforeach()
-add_executable(car_sniffer.elf src/main.c src/engine.c src/protocol.c src/usb_transport.c ${HAL_SOURCES}
+add_executable(car_sniffer.elf src/main.c src/calibration_flash.c src/engine.c src/protocol.c src/usb_transport.c ${HAL_SOURCES}
  ${CMSIS}/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.c
  ${CMSIS}/Device/ST/STM32F4xx/Source/Templates/gcc/startup_stm32f407xx.s
  ${USB}/Core/Src/usbd_core.c ${USB}/Core/Src/usbd_ctlreq.c ${USB}/Core/Src/usbd_ioreq.c ${USB}/Class/CDC/Src/usbd_cdc.c)

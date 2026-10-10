@@ -8,7 +8,7 @@ Implementations: `firmware/include/protocol.h`, `firmware/src/protocol.c`, `desk
 |---:|---|---|
 | 0 | ASCII `CS` magic | 2 bytes |
 | 2 | Version=1 | uint8 |
-| 3 | Kind 1..9 | uint8 |
+| 3 | Kind 1..10 | uint8 |
 | 4 | Payload size, maximum 1024 | uint16 |
 | 6 | Sequence | uint32 |
 | 10 | Payload | size bytes |
@@ -16,7 +16,7 @@ Implementations: `firmware/include/protocol.h`, `firmware/src/protocol.c`, `desk
 
 CRC is standard reflected CRC-32/ISO-HDLC, polynomial 0xEDB88320, initial/final XOR 0xFFFFFFFF, covering header and payload. `123456789` -> 0xCBF43926. This is the **USB transport** CRC, unrelated to CAN CRC. Sequence counts transmitted envelopes in each direction, modulo 2^32. Dropped MCU telemetry is counted separately because it may be discarded before packetization. A host reconnect resets parser sequence history; a new boot ID starts a new time axis and sequence session. Parser accepts fragments, concatenation, noise and oversized-length rejection. A damaged plausible length may delay resynchronization until its bounded candidate packet can be checked (maximum 1038 bytes); there is no unbounded allocation.
 
-Kinds: COMMAND=1, RESPONSE=2, STATUS=3, CAN_RX=4, TX_STATUS=5, EVENT=6, ADC=7, RAW=8, AUTO=9. Payloads for kinds 3..9 are homogeneous concatenated packed records; COMMAND and RESPONSE carry exactly one operation.
+Kinds: COMMAND=1, RESPONSE=2, STATUS=3, CAN_RX=4, TX_STATUS=5, EVENT=6, ADC=7, RAW=8, AUTO=9, COEFFICIENTS=10. Payloads for kinds 3..10 are homogeneous concatenated packed records; COMMAND and RESPONSE carry exactly one operation.
 
 ## Commands and response
 
@@ -30,6 +30,10 @@ Command prefix `request_id:uint32, command:uint8`. The table lists remaining arg
 | Capture | 4 | enable:u8, 0/1 |
 | Channel | 5 | channel:u8 0..7, enable:u8, range:u8 0=3.3V,1=15V |
 | Profile | 6 | channel:u8, range:u8, version:u32, count:u8 2..32, then count * (raw:u16,volts:f32) |
+| Linear profile | 10 | channel:u8, range:u8, version:u32, zero:f32, gain:f32 (14 bytes); RAM staging, zero strictly between2 and4093, positive gain<=0.1 |
+| Save calibration | 11 | none; bridge/capture off and all16 linear profiles required; commits dual-copy Flash, responds after readback |
+| Reload calibration | 12 | none; bridge/capture off; discard staging and reload Flash or nominal defaults |
+| Read coefficients | 13 | none; returns16 COEFFICIENTS records and a normal response (either may arrive first; match request ID and await both); read-only active-profile query |
 | Raw session | 7 | channel:u8, duration_ms:u16 0..10000, zero cancels |
 | Clear counters | 8 | none; leaves capture/bridge/GUI results alone |
 | Internal loopback self-test | 9 | side:u8; bridge and Auto must be off; sends fixed ID 321/data 43 53 01 02 03 04 05 06 in **silent loopback**, restores silent mode |
@@ -46,6 +50,7 @@ Notation follows Python `struct` with implicit little-endian prefix `<`.
 | TX_STATUS | `QIBBb`, 15 bytes | timestamp, original frame_id, destination side, state, signed TX_ACK |
 | EVENT | `QBBIII`, 22 bytes | timestamp, side, code, detail, TEC, REC |
 | ADC | `QBBHfffI`, 28 bytes | window start, channel, range, quality, raw mean, raw population std, volts, profile version |
+| COEFFICIENTS (kind10) | `IBBBIff`,19 bytes | request ID, channel, range, source(0=factory defaults,1=linear,2=table), version, a(V/count), b(V); x=raw ADC. Legacy table returns NaN a/b. |
 | RAW | `QBBH`, 12 bytes | scan trigger time, channel, range, raw ADC |
 | AUTO | `QBBI`, 14 bytes | timestamp, side, stage, bitrate |
 | STATUS | `QIII12sBBBBII16I`, 108 bytes | timestamp, boot ID, telemetry lost records, capture generation, UID[12], bridge, capture, CAN state A, CAN state B, rate A, rate B, 8 counters A then 8 B |

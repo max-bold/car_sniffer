@@ -25,6 +25,7 @@ class DemoDevice:
         self.raw_ch = 0
         self.last_raw = 0
         self.profiles = {}
+        self.saved_profiles = {}
         self.fps = frames_per_second
         self.auto = {}
 
@@ -80,6 +81,28 @@ class DemoDevice:
                 self.profiles[ch, range_] = Profile(ch, range_, version, points).validate()
             except ValueError:
                 result = 1
+        elif command == p.Command.LINEAR_PROFILE:
+            from .calibration import LinearProfile
+            ch,r,version,zero,gain=struct.unpack('<BBIff',args)
+            try:self.profiles[ch,r]=LinearProfile(ch,r,version,zero,gain).validate()
+            except ValueError:result=1
+        elif command == p.Command.SAVE_CALIBRATION:
+            if self.capture or self.bridge or len(self.profiles)!=16:result=2
+            else:self.saved_profiles=dict(self.profiles)
+        elif command == p.Command.RELOAD_CALIBRATION:
+            if self.capture or self.bridge:result=2
+            else:self.profiles=dict(self.saved_profiles)
+        elif command == p.Command.READ_COEFFICIENTS:
+            from .calibration import LinearProfile
+            values=[]
+            for ch in range(8):
+                for r in range(2):
+                    profile=self.profiles.get((ch,r))
+                    if isinstance(profile,LinearProfile):source,version,a,b=1,profile.version,profile.gain,-profile.zero*profile.gain
+                    elif profile:source,version,a,b=2,profile.version,float('nan'),float('nan')
+                    else:source,version,a,b=0,0,(1.47,6.17)[r]*3.3/4095,-1.551
+                    values.append(p.COEFFICIENTS.pack(request,ch,r,source,version,a,b))
+            packets.append(self.packet(p.Kind.COEFFICIENTS,b''.join(values)))
         elif command == p.Command.CLEAR_COUNTERS:
             self.counters = [[0] * 8 for _ in range(2)]
         elif command == p.Command.LOOPBACK_TEST:
@@ -121,7 +144,7 @@ class DemoDevice:
                     if not self.enabled[ch]:
                         continue
                     volts = (1.5 + math.sin(t / 1e6 * (ch + 1) * .7)) * (3 if self.ranges[ch] else 1)
-                    raw = volts / (5 if self.ranges[ch] else 1) / 3.3 * 4095
+                    raw = (volts+3.3*.47) / (6.17 if self.ranges[ch] else 1.47) / 3.3 * 4095
                     profile = self.profiles.get((ch, self.ranges[ch]))
                     q, version = p.Quality.UNCALIBRATED, 0
                     if profile:

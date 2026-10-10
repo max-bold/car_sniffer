@@ -20,6 +20,7 @@ class Kind(IntEnum):
     ADC = 7
     RAW = 8
     AUTO = 9
+    COEFFICIENTS = 10
 
 class Command(IntEnum):
     STATUS = 1
@@ -31,9 +32,14 @@ class Command(IntEnum):
     RAW = 7
     CLEAR_COUNTERS = 8
     LOOPBACK_TEST = 9
+    LINEAR_PROFILE = 10
+    SAVE_CALIBRATION = 11
+    RELOAD_CALIBRATION = 12
+    READ_COEFFICIENTS = 13
 
 class Quality(IntFlag):
-    UNCALIBRATED = 1
+    FACTORY_DEFAULTS = 1
+    UNCALIBRATED = FACTORY_DEFAULTS  # compatibility with legacy clients/tests
     CLIPPING = 2
     SETTLING = 4
     OUT_OF_RANGE = 8
@@ -54,6 +60,7 @@ EVENT = struct.Struct('<QBBIII')  # t, side (255=device), code, detail, TEC, REC
 ADC = struct.Struct('<QBBHfffI')  # window start, channel, range, quality, raw mean, raw std, volts, profile version
 RAW = struct.Struct('<QBBH')  # t, channel, range, raw uint16
 AUTO = struct.Struct('<QBBI')  # t, side, stage (0=trying,1=found,2=unknown), bitrate
+COEFFICIENTS = struct.Struct('<IBBBIff')  # request,channel,range,source(0=nominal,1=linear,2=table),version,a,b; x=raw ADC
 STATUS = struct.Struct('<QIII12sBBBBII16I')
 # t, boot_id, flags, capture_generation, uid, bridge,capture,modeA,modeB, rateA,rateB,
 # 8 counters per side: RX,TX,error,rx_overflow,tx_drop,expired,TEC,REC
@@ -95,7 +102,7 @@ class Parser:
             if len(self.buffer) < HEADER.size:
                 break
             _, version, kind, length, seq = HEADER.unpack_from(self.buffer)
-            if version != VERSION or length > MAX_PAYLOAD or not 1 <= kind <= 9:
+            if version != VERSION or length > MAX_PAYLOAD or not 1 <= kind <= 10:
                 self.bad_header += 1
                 del self.buffer[0]
                 continue
