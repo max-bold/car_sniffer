@@ -1,0 +1,1 @@
+{"version":3,"configurePresets":[{"name":"debug","generator":"Ninja","binaryDir":"${sourceDir}/build","toolchainFile":"${sourceDir}/cmake/arm-none-eabi.cmake","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug"}}],"buildPresets":[{"name":"debug","configurePreset":"debug"}]}

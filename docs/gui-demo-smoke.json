@@ -1,0 +1,28 @@
+{
+  "port": "DEMO",
+  "requested_demo_fps": 1000,
+  "duration_s": 1.0,
+  "rows": [
+    511,
+    511
+  ],
+  "evicted_rows": [
+    0,
+    0
+  ],
+  "analog_points": [
+    102,
+    102,
+    102,
+    102,
+    102,
+    102,
+    102,
+    102
+  ],
+  "host_dropped_packets": 0,
+  "sequence_gaps": 0,
+  "max_update_ms": 7.51,
+  "updates": 19,
+  "worker_error": ""
+}

@@ -1,0 +1,1 @@
+"""Car Sniffer desktop application."""

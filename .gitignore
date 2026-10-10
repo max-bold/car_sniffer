@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+firmware/vendor/
+firmware/build/
+build/
+dist/
+*.spec
+*.pyc
+tmp/
+backups/

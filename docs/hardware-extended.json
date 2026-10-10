@@ -1,0 +1,17 @@
+{
+  "fragmented_command": true,
+  "bad_crc_not_executed": true,
+  "bad_length_resync": true,
+  "unconfirmed_bridge_rejected": true,
+  "independent_channel_disable": true,
+  "raw_samples": 640,
+  "raw_step_us": 625,
+  "loss_before_backpressure": 1,
+  "loss_after_backpressure": 540,
+  "silent_auto_no_traffic_unknown": true,
+  "bridge": false,
+  "capture": false,
+  "range0": 1,
+  "transport_bad_crc": 0,
+  "transport_gaps": 0
+}

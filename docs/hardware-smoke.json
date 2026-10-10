@@ -1,0 +1,25 @@
+{
+  "port": "COM8",
+  "device_id": "50001d0010363141324c5353",
+  "boot_id": 1712498534,
+  "adc_points_in_2s": {
+    "0": 201,
+    "1": 201,
+    "2": 201,
+    "3": 201,
+    "4": 201,
+    "5": 201,
+    "6": 201,
+    "7": 201
+  },
+  "adc_step_us": 10000,
+  "loopback_sides": [
+    0,
+    1
+  ],
+  "bridge": false,
+  "capture_after_test": false,
+  "bad_crc": 0,
+  "sequence_gaps": 0,
+  "telemetry_loss": 1
+}
