@@ -1,52 +1,39 @@
-# Standalone analog calibration
+# Standalone analog calibration: fixed divider
 
-Run `calibrate.bat` or `.venv/Scripts/python.exe -m desktop.calibrate`. Close/disconnect the acquisition application first; only one program may own the COM port. The utility stops bridge/capture and selects divided mode. The acquisition application never reads or uploads calibration files.
+Run `calibrate.bat` or `.venv/Scripts/python.exe -m desktop.calibrate`. Disconnect the main acquisition application first; only one program may own the COM port. Use the fixed-divider firmware and updated desktop together. Older firmware is rejected when it returns a removed range during coefficient readback.
 
-## Three steps for all eight inputs
+## Hardware and two steps
 
-1. Connect **AIN1–AIN8 to GND**. Press Measure. Zero is measured in both ranges for all eight inputs.
-2. Connect **AIN1–AIN8 to approximately 2.0 V**. Enter the actual multimeter reading (default **2.0000 V**). Measure gain without the divider. All inputs return to divided mode before the next step.
-3. Connect **AIN1–AIN8 to approximately 10.0 V**. Enter the actual multimeter reading (default **10.0000 V**). Measure divided-range gain. Disconnect the source or connect the inputs to GND, then click **Write to device**.
+All eight channels use R3=47k from AIN to the ADC node, R1=100k from VREF+ to the node, R2=10k permanently from the node to GND, and C1=1nF to GND. Disconnect the former PD8..PD15 divider wires and remove the shunt zeners. There are no range GPIO controls or DIV checkboxes. See [pinout](pinout.md).
 
-Use a stable low-impedance source capable of supplying all eight networks, with a common GND. Keep the MCU powered; do not reset with 10 V applied. One channel is sampled at a time, at1600 samples/s for1 s after a100 ms settling delay. The zero step takes about22 s; each gain step about11 s. Do not change wiring during a step.
+1. Connect **AIN1..AIN8 to board GND**, then press Measure. The wizard measures eight zero offsets.
+2. Connect **AIN1..AIN8 to approximately10.0 V**, enter the actual multimeter reading, then press Measure. The wizard measures eight gains.
+3. Disconnect the source or ground the inputs, then press **Записать в устройство** to upload the eight profiles and persist them in Flash.
 
-Require at least90% of expected samples, continuous625 us timestamps, raw std<=3 ADC counts, no clipping (codes<=2 or>=4093), and reference span>=100 ADC counts. A clipped zero is rejected: the revised VREF bias should lift zero above the ADC rail. Missing packets or command rejection abort the wizard; reconnect/reset it to start again.
+Use a stable low-impedance source and common ground. Each channel is sampled separately at1600 samples/s for1 s after100 ms settling; each measurement step takes about11 s. Do not change connections during a step. The physical divider is permanent during reset, but the current hardware has no fitted Schottky protection and is not validated against faults, negative voltage or input applied without MCU power.
 
-Each of sixteen profiles stores fractional zero ADC code and positive volts/count:
+Require at least90% of expected samples, continuous625 us timestamps, raw std<=30 ADC counts, no clipping (codes<=2 or>=4093), and reference span>=100 ADC counts. Source drift is checked separately: split the samples into up to ten consecutive blocks of at least160 samples (100 ms at1600 Hz); the largest minus smallest block mean must be<=84 ADC counts. All samples contribute to the calibration mean; no detrending or outlier removal is performed. This acceptance check does not establish voltage accuracy. A clipped zero is rejected: the revised VREF bias should lift zero above the ADC rail. Missing packets or command rejection abort the wizard; reconnect/reset it to start again. Measurement validation errors identify the channel/range and measured ADC statistics.
 
-`Vin = (raw - zero) * gain`, `gain = Vreference / (mean_reference - mean_zero)`.
+Each channel stores fractional zero and positive volts/count: `Vin = (raw-zero)*gain`, `gain = Vreference/(mean_reference-mean_zero)`. Every sample is converted before16-sample averaging. Two-point calibration corrects offset and slope; it does not compensate nonlinear protection or prove accuracy over the whole range.
 
-Zero is not rounded or clamped; small negative results near zero are retained and may carry the selected-range flag. This affine model extends beyond the two measured anchors and assumes linearity. Two-point calibration does not establish accuracy near diode conduction or across the entire range. Clipping still invalidates displayed traces. Every sample is converted before the16-sample average.
+## Defaults
 
-## Nominal defaults for the revised input
+Assuming VREF=VDDA=3.3 V: `Vin = 6.17*Vadc - 1.551 V`, where `Vadc=raw*3.3/4095`. Nominal zero is311.936791 counts and gain0.004972161172 V/count. The UI shows `y=a*x+b`, with x in ADC volts: factory a=6.17, b=-1.551 V. One ADC count corresponds to approximately4.97 mV at AIN. Values at the ADC are approximately0.251 V for AIN=0 V and2.682 V for AIN=15 V.
 
-[Revised input schematic](analog-input-biased.png). R1=100 kΩ from ADC node to VREF; R3=47 kΩ from AIN to ADC node; R2=10 kΩ from ADC node to the open-drain GPIO; C1=1 nF. Assume VREF=VDDA=3.3 V, negligible clamp leakage and low source impedance.
+On connection command13 returns **eight** coefficient records with the reserved wire range field fixed at1. The table shows one a/b pair per channel. Measured drafts are highlighted until written; saved profiles are reread from the device. The main acquisition app does not query or upload calibration.
 
-With R2 released: `Vin = (1+R3/R1)*Vadc - (R3/R1)*VREF = 1.47*Vadc - 1.551 V`.
+## Persistence, compatibility and reset
 
-With GPIO low: `Vin = (1+R3/R1+R3/R2)*Vadc - (R3/R1)*VREF = 6.17*Vadc - 1.551 V`.
+Only the standalone utility uploads/saves calibration. Accepted uploads apply in RAM immediately. Save is rejected while bridge/capture are active or any of the eight linear profiles is missing. Successful saves survive power cycles; no MCU reset is required.
 
-At12 bits, `Vadc=raw*3.3/4095`:
+Flash sectors6/7 at0x08040000 and0x08060000 are reserved128 KiB slots. CAL2 records contain eight profiles, generation, size, CRC and a commit marker written last. The inactive slot is erased; interrupted writes preserve the preceding CAL2 record. Factory reset commits a newer empty CAL2 record, then reloads nominal defaults. **Заводские коэффициенты…** requests confirmation and verifies all eight source0/version0 profiles after reset. **Сбросить мастер** only discards measurements in the utility.
 
-| Mode | Nominal zero, counts | Nominal gain, V/count |
-|---|---:|---:|
-| R2 released, 0–3.3 V UI range | 1309.285714 | 0.001184615385 |
-| R2 grounded, 0–15 V UI range | 311.936791 | 0.004972161172 |
+**CAL1 records from the old two-range hardware are deliberately ignored, without erasing them at boot or during application programming.** The changed analog circuit requires new measurements; there is no automatic reuse of old divided-range profiles. On first boot without CAL2, nominal defaults are active. A later explicit save/reset writes only one calibration slot using the dual-copy scheme. Never mass-erase or change option bytes as part of a firmware update.
 
-Without saved calibration firmware uses these formulas and reports FACTORY_DEFAULTS/version0. The board is usable with lower accuracy. Resistor tolerance, reference error, GPIO low voltage, leakage and source impedance affect accuracy. Old40k/10k coefficients are incompatible. If the VREF shown in the input circuit differs from VDDA, review the nominal model and calibrate.
-
-## Device persistence and firmware updates
-
-Only the utility uploads profiles. It awaits all sixteen acknowledgements, then asks firmware to save. Flash sectors6/7 at `0x08040000` and `0x08060000` (128 KiB each) are excluded from the application linker region. Firmware erases only the inactive slot, writes a versioned generation/CRC32 record, then writes the commit marker last. Boot selects the newest valid copy. Interrupted writes preserve the previous copy; interrupted first-ever writes leave nominal defaults. Save is rejected if capture/bridge is active or profiles are incomplete.
-
-The utility saves an optional audit report in `%LOCALAPPDATA%/CarSniffer/calibration-report-<uid>.json` after the Flash acknowledgement. The board does not need that file, the PC or the main application to apply calibration. Legacy desktop JSON profiles are not imported. Legacy table commands remain supported, but the wizard creates affine profiles only. The capture application's ordinary channel/bitrate preferences use separate Qt settings.
-
-The application is now limited to256 KiB within the physical512 KiB. Use sector-aware firmware download; **mass erase removes calibration**. Persisted-format compatibility is checked using magic/size/CRC; changes to the stored structure require explicit format migration. Do not erase option bytes or the original local Flash backup.
+An optional audit report is saved to `%LOCALAPPDATA%/CarSniffer/calibration-report-<uid>.json` after acknowledged persistence. It is not needed by the device or main app; legacy reports are not imported automatically.
 
 ## Verification limits
 
-Native tests execute actual storage code against simulated NOR Flash, with failure before every programmed word and CRC corruption. Wizard tests exercise all three steps and acknowledged saves. Revised-board accuracy, actual clamp behavior and physical power-cut endurance still require a source/voltmeter bench. Firmware timing is provisional; calibration does not establish electrical safety. Reset releases the range GPIO and does not guarantee a safe15 V input range.
+Native tests simulate NOR Flash interruption, factory reset and rejection of CRC-valid CAL1 data without modifying Flash on load. Wizard tests exercise GND/10 V, eight uploads, acknowledged persistence/readback and factory reset. Physical accuracy/protection of the revised hardware still requires bench measurement.
 
-## Current coefficients in the wizard
-
-On connection the utility reads all16 active profiles from the device (command13, packet kind10). The table labels are `div off` and `div on`. Displayed coefficients use `y=a*x+b`, with `x=raw ADC*3.3/4095` in volts and `y=AIN voltage` in volts; the stored/raw-protocol gain is volts per ADC count, so displayed `a=gain*4095/3.3`, `b=-zero*gain`. Before connecting the table explicitly previews factory defaults (a1.47/6.17,b-1.551); after connecting it shows actual readback. New measured coefficients are colored until written; after saving coefficients are read back again. Legacy nonlinear tables are labeled as tables rather than presenting a false single straight line.
+The acceptance limits30/84 ADC counts were derived as three times maximum noise/block-mean span from5 s acquisitions with the owner reporting2 V on all inputs, before removing zeners and range control. They are retained as acceptance tolerances, not a measured accuracy guarantee for the rebuilt circuit.

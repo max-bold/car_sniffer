@@ -1,4 +1,4 @@
-"""Standalone three-step DC calibration wizard. Run: python -m desktop.calibrate."""
+"""Standalone two-step DC calibration wizard. Run: python -m desktop.calibrate."""
 import json
 import os
 from pathlib import Path
@@ -33,12 +33,12 @@ class CalibrationWindow(W.QWidget):
         self.connect=W.QPushButton('Подключить');self.connect.clicked.connect(self.connect_device);row.addWidget(self.connect)
         intro=W.QLabel('Калибровка всех 8 входов. Закройте основное приложение, чтобы освободить COM-порт.\n'
                        'Источник подключайте к AIN 1–8, общий провод — к GND платы. '
-                       'Плата должна быть запитана; не перезапускайте её с поданными 10 В.');intro.setWordWrap(True);layout.addWidget(intro)
+                       'Постоянный диапазон 0–15 В. Делитель 10 кОм должен быть подключён к GND.');intro.setWordWrap(True);layout.addWidget(intro)
         self.instruction=W.QLabel();self.instruction.setWordWrap(True);layout.addWidget(self.instruction)
         form=W.QFormLayout();layout.addLayout(form)
         self.reference=W.QDoubleSpinBox();self.reference.setDecimals(4);self.reference.setSuffix(' V')
         form.addRow('Фактическое напряжение по мультиметру:',self.reference)
-        self.table=W.QTableWidget(8,5);self.table.setHorizontalHeaderLabels(['Вход','div off: a','div off: b, В','div on: a','div on: b, В'])
+        self.table=W.QTableWidget(8,3);self.table.setHorizontalHeaderLabels(['Вход','a','b, В'])
         self.table.setEditTriggers(W.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(W.QHeaderView.ResizeMode.Stretch)
         for ch in range(8):self.table.setItem(ch,0,W.QTableWidgetItem(f'AIN {ch+1}'))
@@ -50,6 +50,7 @@ class CalibrationWindow(W.QWidget):
         self.run=W.QPushButton('Измерить');self.run.setObjectName('captureButton');self.run.clicked.connect(self.start_stage);row.addWidget(self.run)
         self.save=W.QPushButton('Записать в устройство');self.save.clicked.connect(self.save_device);row.addWidget(self.save)
         self.reset=W.QPushButton('Сбросить мастер');self.reset.clicked.connect(self.reset_wizard);row.addWidget(self.reset)
+        self.factory=W.QPushButton('Заводские коэффициенты…');self.factory.clicked.connect(self.reset_factory);layout.addWidget(self.factory)
         self.info=W.QLabel('Подключите плату. Коэффициенты применяет устройство; основное приложение их не загружает.');self.info.setWordWrap(True);layout.addWidget(self.info)
         self.timer=QtCore.QTimer(self);self.timer.timeout.connect(self.poll);self.timer.start(25)
         self.refresh_ports();self.show_stage();self.draw_coefficients()
@@ -59,21 +60,20 @@ class CalibrationWindow(W.QWidget):
         for port in serial.tools.list_ports.comports():self.port.addItem(f'{port.device} — {port.description}',port.device)
 
     def controls(self):
-        self.run.setEnabled(self.ready and not self.busy and self.stage<3)
-        self.save.setEnabled(self.ready and not self.busy and self.stage==3 and len(self.profiles)==16)
-        self.reference.setEnabled(not self.busy and self.stage in (1,2))
+        self.run.setEnabled(self.ready and not self.busy and self.stage<2)
+        self.save.setEnabled(self.ready and not self.busy and self.stage==2 and len(self.profiles)==8)
+        self.reference.setEnabled(not self.busy and self.stage==1)
         self.reset.setEnabled(not self.busy)
+        self.factory.setEnabled(self.ready and not self.busy)
         self.connect.setEnabled(not self.busy);self.port.setEnabled(not self.worker);self.refresh.setEnabled(not self.worker)
 
     def show_stage(self):
         instructions=[
-            'Шаг 1/3. Подключите все 8 аналоговых входов к GND.\nНажмите «Измерить»: ноль будет измерен автоматически в обоих режимах.',
-            'Шаг 2/3. Подключите все 8 входов к источнику примерно 2.0 В.\nВведите точное показание мультиметра. Будет измерен наклон div off.',
-            'Шаг 3/3. Подключите все 8 входов к источнику примерно 10.0 В.\nВведите точное показание мультиметра. Будет измерен наклон div on.',
-            'Все 16 профилей готовы. Отключите источник 10 В или подключите входы к GND.\nНажмите «Записать в устройство»: коэффициенты сохранятся во Flash и будут применяться после включения питания.']
+            'Шаг 1/2. Подключите все 8 аналоговых входов к GND.\nНажмите «Измерить»: будет измерен ноль каждого входа.',
+            'Шаг 2/2. Подключите все 8 входов к источнику примерно 10.0 В.\nВведите точное показание мультиметра и нажмите «Измерить».',
+            'Все 8 профилей готовы. Отключите источник 10 В или подключите входы к GND.\nНажмите «Записать в устройство»: коэффициенты применятся сразу и сохранятся во Flash. Перезапуск не требуется.']
         self.instruction.setText(instructions[self.stage])
-        if self.stage==1:self.reference.setRange(1,3);self.reference.setValue(2)
-        elif self.stage==2:self.reference.setRange(8,12);self.reference.setValue(10)
+        if self.stage==1:self.reference.setRange(8,12);self.reference.setValue(10)
         else:self.reference.setRange(0,15);self.reference.setValue(0)
         self.controls()
 
@@ -114,8 +114,7 @@ class CalibrationWindow(W.QWidget):
     def start_stage(self):
         if not self.ready or self.busy:return
         self.busy=True;self.controls();self.references[self.stage]=self.reference.value()
-        ranges=(0,1) if self.stage==0 else (self.stage-1,)
-        self.jobs=[(ch,r) for r in ranges for ch in range(8)]
+        self.jobs=[(ch,1) for ch in range(8)]
         self.total=len(self.jobs);self.progress.setRange(0,self.total);self.progress.setValue(0)
         self.next_channel()
 
@@ -123,7 +122,7 @@ class CalibrationWindow(W.QWidget):
         if not self.jobs:
             self.sequence([(p.Command.CHANNEL,bytes([ch,1,1])) for ch in range(8)],self.finish_stage);return
         self.active=self.jobs.pop(0);ch,r=self.active;self.raw=[];self.raw_since=None
-        self.info.setText(f'Измеряется AIN {ch+1}, {('div off','div on')[r]}. Не меняйте подключение.')
+        self.info.setText(f'Измеряется AIN {ch+1}, 0–15 В. Не меняйте подключение.')
         def settled():
             if not self.busy:return
             def started():self.collect_at=time.monotonic()+(self.duration_ms+250)/1000
@@ -136,7 +135,11 @@ class CalibrationWindow(W.QWidget):
         times=np.asarray([v[0] for v in self.raw]);raw=[v[3] for v in self.raw]
         if len(times)<int(self.duration_ms*1.6*.9) or np.any(np.diff(times)!=625):
             raise ValueError('Неполный RAW поток или пропуск отсчётов')
-        mean=dc_point(raw,0 if self.stage==0 else self.references[self.stage])[0]
+        try:
+            dc_point(raw,0 if self.stage==0 else self.references[self.stage])
+        except ValueError as exc:
+            raise ValueError(f'AIN {ch+1}, 0–15 В: {exc}; '
+                             f'n={len(raw)}, mean={np.mean(raw):.2f}, min={min(raw)}, max={max(raw)}') from exc
         self.samples[self.stage,ch,r]=raw
         if self.stage!=0:
             profile=linear_profile(ch,r,self.samples[0,ch,r],raw,self.references[self.stage],int(time.time()))
@@ -145,11 +148,11 @@ class CalibrationWindow(W.QWidget):
 
     def finish_stage(self):
         self.active=None;self.busy=False;self.stage+=1;self.show_stage()
-        self.info.setText('Измерение завершено. Все входы переведены в режим с делителем. Коэффициенты ещё не записаны.')
+        self.info.setText('Измерение завершено. Коэффициенты ещё не записаны.')
 
     def save_device(self):
-        if not self.ready or self.busy or len(self.profiles)!=16:return
-        self.busy=True;self.controls();self.info.setText('Передача 16 профилей и запись Flash… Не отключайте питание.')
+        if not self.ready or self.busy or len(self.profiles)!=8:return
+        self.busy=True;self.controls();self.info.setText('Передача 8 профилей и запись Flash… Не отключайте питание.')
         self.sequence([profile_command(profile) for profile in self.profiles]+[(p.Command.SAVE_CALIBRATION,b'')],self.saved)
 
     def saved(self):
@@ -160,25 +163,43 @@ class CalibrationWindow(W.QWidget):
         try:
             base=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'CarSniffer'
             ProfileStore(base/f'calibration-report-{self.uid}.json').save(self.uid,profiles)
-            self.info.setText('Калибровка записана в устройство. После перезапуска она применяется автоматически. Можно закрыть утилиту.')
+            self.info.setText('Калибровка применена и сохранена во Flash. Перезапуск не требуется; после включения питания она восстановится автоматически. Можно закрыть утилиту.')
         except (OSError,ValueError) as exc:self.info.setText(f'Калибровка записана в устройство, но отчёт не сохранён: {exc}')
 
     def finish_readback(self):
         self.busy=False;self.controls()
 
+    def reset_factory(self):
+        if not self.ready or self.busy:return
+        answer=W.QMessageBox.question(self,'Сброс к заводским коэффициентам',
+            'Заменить калибровку всех 8 входов заводскими коэффициентами?\n'
+            'Результат сохранится во Flash и применится сразу. Измеренные коэффициенты будут заменены.',
+            W.QMessageBox.StandardButton.Yes|W.QMessageBox.StandardButton.No,W.QMessageBox.StandardButton.No)
+        if answer!=W.QMessageBox.StandardButton.Yes:return
+        self.busy=True;self.controls();self.info.setText('Восстановление заводских коэффициентов… Не отключайте питание.')
+        commands=[(p.Command.BRIDGE,b'\0'),(p.Command.CAPTURE,b'\0')]
+        commands += [(p.Command.CHANNEL,bytes([ch,1,1])) for ch in range(8)]
+        commands += [(p.Command.RESET_CALIBRATION,b'')]
+        self.sequence(commands,lambda:self.read_coefficients(self.factory_readback))
+
+    def factory_readback(self):
+        if len(self.current)!=8 or any(source!=0 or version!=0 for source,version,_,_ in self.current.values()):
+            raise ValueError('Устройство не подтвердило заводские коэффициенты')
+        self.busy=False;self.reset_wizard()
+        self.info.setText('Заводские коэффициенты применены и сохранены во Flash. Перезапуск не требуется.')
+
     def draw_coefficients(self):
         drafts={(profile.channel,profile.range):profile for profile in self.profiles}
         for ch in range(8):
-            for r in range(2):
-                source,version,a,b=self.current.get((ch,r),(0,0,(1.47,6.17)[r]*3.3/4095,-1.551))
-                draft=drafts.get((ch,r))
-                if draft:a,b=draft.gain,-draft.zero*draft.gain
-                for offset,value in enumerate((a,b)):
-                    item=W.QTableWidgetItem(f'{value*(4095/3.3) if offset==0 else value:.6f}' if np.isfinite(value) else 'таблица')
-                    note='Новые коэффициенты; ещё не записаны' if draft else ('factory defaults' if source==0 else f'Измеренные коэффициенты, версия {version}' if source==1 else 'Нелинейный профиль: единой прямой нет')
-                    item.setToolTip(note)
-                    if draft:item.setForeground(QtGui.QColor('#efba73'))
-                    self.table.setItem(ch,1+r*2+offset,item)
+            source,version,a,b=self.current.get((ch,1),(0,0,6.17*3.3/4095,-1.551))
+            draft=drafts.get((ch,1))
+            if draft:a,b=draft.gain,-draft.zero*draft.gain
+            for offset,value in enumerate((a,b)):
+                item=W.QTableWidgetItem(f'{value*(4095/3.3) if offset==0 else value:.6f}' if np.isfinite(value) else 'таблица')
+                note='Новые коэффициенты; ещё не записаны' if draft else ('factory defaults' if source==0 else f'Измеренные коэффициенты, версия {version}' if source==1 else 'Нелинейный профиль: единой прямой нет')
+                item.setToolTip(note)
+                if draft:item.setForeground(QtGui.QColor('#efba73'))
+                self.table.setItem(ch,1+offset,item)
 
     def read_coefficients(self,done):
         self.read_received=set();self.read_ack=False;self.read_done=done;self.read_started=time.monotonic()
@@ -186,7 +207,7 @@ class CalibrationWindow(W.QWidget):
         self.read_request=self.command(p.Command.READ_COEFFICIENTS,done=acknowledged)
 
     def finish_coefficients(self):
-        if self.read_request is None or not self.read_ack or len(self.read_received)!=16:return
+        if self.read_request is None or not self.read_ack or len(self.read_received)!=8:return
         self.read_request=None
         self.coefficient_title.setText('y = a*x + b; x = raw ADC × 3.3/4095 В, y — напряжение AIN, В. Текущие коэффициенты считаны с устройства; новые до записи выделены цветом.')
         self.draw_coefficients();done=self.read_done;self.read_done=None;done()
@@ -214,7 +235,8 @@ class CalibrationWindow(W.QWidget):
                 elif packet.kind==p.Kind.COEFFICIENTS:
                     for request,ch,r,source,version,a,b in p.records(p.COEFFICIENTS,packet.payload):
                         if request==self.read_request:
-                            if ch>=8 or r>1 or source>2 or (source!=2 and (not np.isfinite([a,b]).all() or a<=0)):
+                            if r!=1:raise ValueError('Нужна прошивка для постоянного делителя. Обновите прошивку платы.')
+                            if ch>=8 or source>2 or (source!=2 and (not np.isfinite([a,b]).all() or a<=0)):
                                 raise ValueError('Некорректные коэффициенты устройства')
                             self.current[ch,r]=(source,version,a,b);self.read_received.add((ch,r))
                     self.finish_coefficients()
@@ -228,7 +250,7 @@ class CalibrationWindow(W.QWidget):
                 elif packet.kind==p.Kind.RAW and self.active and self.raw_since is not None:
                     for value in p.records(p.RAW,packet.payload):
                         if value[1:3]==self.active and value[0]>=self.raw_since and len(self.raw)<16000:self.raw.append(value)
-            if self.read_request is not None and time.monotonic()-self.read_started>8:raise ValueError('Устройство не передало все16 коэффициентов')
+            if self.read_request is not None and time.monotonic()-self.read_started>8:raise ValueError('Устройство не передало все 8 коэффициентов')
             if any(time.monotonic()-sent>8 for _,sent,_ in self.pending.values()):raise ValueError('Нет подтверждения команды')
             if self.collect_at and time.monotonic()>=self.collect_at:self.finish_channel()
         except (ValueError,OSError,struct.error,KeyError) as exc:self.fail(str(exc))

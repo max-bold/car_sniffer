@@ -12,12 +12,12 @@ typedef struct { float sum,sum2,volts; uint16_t quality; uint8_t count; uint64_t
 typedef void (*emit_fn)(uint8_t,const void *,uint16_t,void *);
 typedef struct {
     forward_queue_t queues[2];
-    cal_profile_t profiles[8][2];
+    cal_profile_t profiles[8];
     analog_window_t windows[8];
     uint64_t settle_until[8];
     uint64_t capture_since;
     uint32_t rate[2],counter[2][8],frame_id,generation;
-    uint8_t bridge,capture,confirmed[2],range[8],enabled[8];
+    uint8_t bridge,capture,confirmed[2],enabled[8];
     emit_fn emit; void *context;
 } engine_t;
 void engine_init(engine_t *e,emit_fn emit,void *context);
@@ -30,6 +30,5 @@ void engine_drop(engine_t *e,unsigned destination,uint64_t now);
 int engine_profile(engine_t *e,unsigned ch,unsigned range,const cal_profile_t *p);
 void engine_coefficients(const engine_t *e,unsigned ch,unsigned range,cs_coefficients_t *out);
 void engine_analog(engine_t *e,const uint16_t raw[8],uint64_t t);
-void engine_range(engine_t *e,unsigned ch,unsigned range,uint64_t now,uint32_t settling_us);
 void engine_event(engine_t *e,unsigned side,unsigned code,uint32_t detail,uint64_t now);
 #endif

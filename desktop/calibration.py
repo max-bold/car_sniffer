@@ -35,6 +35,7 @@ def linear_profile(channel,range_,zero_raw,reference_raw,reference_volts,version
 def profile_command(profile):
     from .protocol import Command
     profile.validate()
+    if profile.range!=1:raise ValueError('Fixed-divider firmware requires range=1')
     if isinstance(profile,LinearProfile):
         return Command.LINEAR_PROFILE,struct.pack('<BBIff',profile.channel,profile.range,profile.version,profile.zero,profile.gain)
     return Command.PROFILE,struct.pack('<BBIB',profile.channel,profile.range,profile.version,len(profile.points))+b''.join(struct.pack('<Hf',int(raw),v) for raw,v in profile.points)
@@ -68,14 +69,23 @@ class Profile:
         outside = (r < a[0, 0]) | (r > a[-1, 0])
         return np.where(outside, np.nan, volts), outside
 
-def dc_point(raw, reference_volts, max_std=3.):
+# 3x worst 5 s bench measurements with 2.0 V applied, rounded up:
+# raw std 9.973805 counts; 100 ms block mean span 27.85 counts.
+def dc_point(raw, reference_volts, max_std=30., max_block_span=84.):
     raw = np.asarray(raw, dtype=float)
     if len(raw) < 160 or not np.isfinite(raw).all():
         raise ValueError('Collect at least 160 valid raw samples')
     if raw.min() <= 2 or raw.max() >= 4093:
         raise ValueError('Clipping: point rejected')
-    if raw.std() > max_std:
-        raise ValueError('Unstable voltage: point rejected')
+    std=float(raw.std())
+    if std > max_std:
+        raise ValueError(f'Unstable voltage: raw std={std:.2f} ADC counts exceeds {max_std:.2f}')
+    # Distinguish sample noise from source drift: at 1600 Hz each block
+    # contains at least 100 ms. Do not silently detrend or discard samples.
+    blocks=np.array_split(raw,min(10,len(raw)//160))
+    span=float(np.ptp([block.mean() for block in blocks]))
+    if span > max_block_span:
+        raise ValueError(f'Unstable voltage: block mean span={span:.2f} ADC counts exceeds {max_block_span:.2f}')
     if not np.isfinite(reference_volts) or reference_volts < 0:
         raise ValueError('Invalid reference voltage')
     return [float(raw.mean()), float(reference_volts)]

@@ -3,4 +3,5 @@
 #include "engine.h"
 void calibration_load(engine_t *engine);
 int calibration_save(const engine_t *engine);
+int calibration_reset(void);
 #endif

@@ -167,10 +167,28 @@ class CanPanel(W.QWidget):
         self.table.setWordWrap(False); self.table.verticalHeader().hide(); self.table.verticalHeader().setDefaultSectionSize(20)
         for col, width in enumerate([88,96,32,32,32,170,55,55,65,75]): self.table.setColumnWidth(col,width)
         self.table.horizontalHeader().moveSection(5,2)
+        header = self.table.horizontalHeader()
+        header.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self.show_column_menu)
+        header.setToolTip('Right-click to choose visible columns')
         layout.addWidget(self.table)
         self.ids.textChanged.connect(self.apply_filter)
         for w in (self.ide,self.rtr): w.currentIndexChanged.connect(self.apply_filter)
         for w in (self.frames,self.events): w.toggled.connect(self.apply_filter)
+
+    def show_column_menu(self, position):
+        header = self.table.horizontalHeader()
+        menu = W.QMenu(self.table)
+        menu.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        visible = sum(not self.table.isColumnHidden(col) for col in range(self.model.columnCount()))
+        for visual in range(header.count()):
+            col = header.logicalIndex(visual)
+            action = menu.addAction(self.model.headers[col])
+            action.setCheckable(True)
+            action.setChecked(not self.table.isColumnHidden(col))
+            action.setEnabled(not action.isChecked() or visible > 1)
+            action.toggled.connect(lambda checked, column=col: self.table.setColumnHidden(column, not checked))
+        menu.popup(header.viewport().mapToGlobal(position))
 
     def apply_filter(self, *_):
         try:
@@ -255,11 +273,10 @@ class MainWindow(W.QMainWindow):
             controls=W.QWidget();controls.setObjectName('channelControls');row=W.QVBoxLayout(controls);row.setContentsMargins(3,2,3,2);row.setSpacing(2)
             controls.setFixedWidth(112)
             en=W.QCheckBox(f'AIN {ch+1}');en.setChecked(True)
-            cb=W.QCheckBox('DIV');cb.setChecked(True);cb.setToolTip('Checked: 0–15 V (divider enabled). Unchecked: 0–3.3 V (divider released).')
             label=W.QLabel('— V');label.setObjectName('channelValue');label.setWordWrap(True)
-            for w in (en,cb,label):row.addWidget(w)
-            row.addStretch();self.channels.append((en,cb,label))
-            en.toggled.connect(lambda v,c=ch:self.channel_change(c));cb.toggled.connect(lambda v,c=ch:self.channel_change(c))
+            for w in (en,label):row.addWidget(w)
+            row.addStretch();self.channels.append((en,label))
+            en.toggled.connect(lambda v,c=ch:self.channel_change(c))
             plot=pg.PlotWidget(viewBox=AnalogViewBox());plot.setMinimumHeight(65);plot.setYRange(0,15,padding=0);plot.showGrid(x=True,y=True,alpha=.12)
             plot.getAxis('left').setWidth(38)
             if ch<7:plot.getAxis('bottom').setStyle(showValues=False);plot.getAxis('bottom').setHeight(5)
@@ -277,7 +294,7 @@ class MainWindow(W.QMainWindow):
         self.content_splitter.setStretchFactor(0,1);self.content_splitter.setStretchFactor(1,1)
         self.content_splitter.setSizes([750,750])
         self.status=W.QLabel('Disconnected');self.status.setWordWrap(True)
-        self.notice=W.QLabel('Apply both bitrates before enabling bridge. Range control defaults low (divided); reset is Hi-Z.');self.notice.setWordWrap(True);self.notice.setObjectName('notice')
+        self.notice=W.QLabel('Apply both bitrates before enabling bridge. Analog inputs: fixed 0-15 V range.');self.notice.setWordWrap(True);self.notice.setObjectName('notice')
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().setFixedHeight(48)
         status_widget=W.QWidget();status_layout=W.QVBoxLayout(status_widget);status_layout.setContentsMargins(3,0,3,0);status_layout.setSpacing(0)
@@ -327,15 +344,13 @@ class MainWindow(W.QMainWindow):
         self.send(p.Command.CAPTURE,bytes([not active]));self.send(p.Command.STATUS)
 
     def channel_change(self,ch):
-        en,cb,_=self.channels[ch];self.plots[ch].setYRange(0,(3.3,15)[int(cb.isChecked())],padding=0)
-        # Break the trace at the range command even before the settling samples arrive.
-        if self.analog[ch]:self.analog[ch].append((self.analog[ch][-1][0],math.nan))
-        self.send(p.Command.CHANNEL,bytes([ch,en.isChecked(),int(cb.isChecked())]))
+        en,_=self.channels[ch]
+        self.send(p.Command.CHANNEL,bytes([ch,en.isChecked(),1]))
         self.save_settings()
 
     def save_settings(self):
         if not self.device_id:return
-        settings={'channels':[{'enabled':en.isChecked(),'range':int(cb.isChecked())} for en,cb,_ in self.channels],
+        settings={'channels':[{'enabled':en.isChecked()} for en,_ in self.channels],
                   'rates':[cb.currentData() for cb in self.rates]}
         QtCore.QSettings('CarSniffer','Desktop').setValue(self.device_id,json.dumps(settings))
 
@@ -358,12 +373,12 @@ class MainWindow(W.QMainWindow):
             except (ValueError,TypeError):saved={}
             for side,rate in enumerate(saved.get('rates',[500000,500000])):
                 self.rates[side].setCurrentIndex(self.rates[side].findData(rate))
-            for ch,(en,cb,_) in enumerate(self.channels):
-                setting=saved.get('channels',[{'enabled':True,'range':1}]*8)[ch]
-                enabled,range_=setting['enabled'],setting['range']
-                en.blockSignals(True);cb.blockSignals(True);en.setChecked(enabled);cb.setChecked(bool(range_));en.blockSignals(False);cb.blockSignals(False)
-                self.plots[ch].setYRange(0,(3.3,15)[range_],padding=0)
-                self.send(p.Command.CHANNEL,bytes([ch,enabled,range_]))
+            for ch,(en,_) in enumerate(self.channels):
+                setting=saved.get('channels',[{'enabled':True}]*8)[ch]
+                enabled=setting['enabled']
+                en.blockSignals(True);en.setChecked(enabled);en.blockSignals(False)
+                self.plots[ch].setYRange(0,15,padding=0)
+                self.send(p.Command.CHANNEL,bytes([ch,enabled,1]))
         self.last_status=values
         self.bridge.blockSignals(True);self.bridge.setChecked(bool(bridge));self.bridge.blockSignals(False)
         self.capture.setText('Stop capture' if capture else 'Start capture')
@@ -403,14 +418,14 @@ class MainWindow(W.QMainWindow):
                             if ch<8 and self.analog[ch]:self.analog[ch].append((t/1e6,math.nan))
                 elif kind==p.Kind.ADC:
                     for t,ch,range_,q,raw,std,volts,version in p.records(p.ADC,data):
-                        if ch>=8 or range_>1:continue
+                        if ch>=8 or range_!=1:continue
                         if len(self.analog[ch])==6000:self.analog_evicted+=1
                         invalid=q & (p.Quality.SETTLING|p.Quality.OUTSIDE_PROFILE|p.Quality.DMA_LOSS|p.Quality.CLIPPING)
                         if self.analog[ch] and t/1e6-self.analog[ch][-1][0]>.015:
                             self.analog[ch].append((self.analog[ch][-1][0]+.005,math.nan))
                         self.analog[ch].append((t/1e6,math.nan if invalid else volts))
                         flags=[flag.name.lower() for flag in (p.Quality.CLIPPING,p.Quality.SETTLING,p.Quality.OUT_OF_RANGE,p.Quality.DMA_LOSS) if flag & q]
-                        self.channels[ch][2].setText(f'{volts:.4f} V\n'+(', '.join(flags) if flags else 'OK'))
+                        self.channels[ch][1].setText(f'{volts:.4f} V\n'+(', '.join(flags) if flags else 'OK'))
                 elif kind==p.Kind.AUTO:
                     for t,side,stage,rate in p.records(p.AUTO,data):self.notice.setText(f'CAN {"AB"[side]} Auto: '+(f'trying {rate/1000:g} kbit/s' if stage==0 else f'found {rate/1000:g} kbit/s' if stage==1 else 'not determined — no valid traffic; check bitrate, wiring and ACK from another node'))
                 elif kind==p.Kind.RESPONSE:

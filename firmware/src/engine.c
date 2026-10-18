@@ -3,7 +3,7 @@
 #include <math.h>
 void engine_init(engine_t *e,emit_fn fn,void *ctx) {
     memset(e,0,sizeof(*e)); e->emit=fn; e->context=ctx;
-    for(unsigned c=0;c<8;c++) { e->range[c]=1; e->enabled[c]=1; }
+    for(unsigned c=0;c<8;c++) { e->enabled[c]=1; }
 }
 void engine_event(engine_t *e,unsigned side,unsigned code,uint32_t detail,uint64_t now) {
     cs_event_t v={.t=now,.side=(uint8_t)side,.code=(uint8_t)code,.detail=detail};
@@ -51,55 +51,51 @@ int engine_take(engine_t *e,unsigned dst,uint64_t now,forward_t *out) {
     return 0;
 }
 int engine_profile(engine_t *e,unsigned ch,unsigned range,const cal_profile_t *p) {
-    if(ch>=8||range>1||!p->version) return -1;
+    if(ch>=8||range!=1||!p->version) return -1;
     if(p->linear) {
         if(p->linear!=1||!isfinite(p->zero)||p->zero<=2||p->zero>=4093||!isfinite(p->gain)||p->gain<=0||p->gain>.1f) return -1;
-        e->profiles[ch][range]=*p; return 0;
+        e->profiles[ch]=*p; return 0;
     }
     if(p->count<2||p->count>PROFILE_POINTS) return -1;
     for(unsigned i=0;i<p->count;i++) {
-        if(p->points[i].raw>4095||!isfinite(p->points[i].volts)||p->points[i].volts<0||p->points[i].volts>(range?15.f:3.3f)) return -1;
+        if(p->points[i].raw>4095||!isfinite(p->points[i].volts)||p->points[i].volts<0||p->points[i].volts>15.f) return -1;
         if(i&&(p->points[i].raw<p->points[i-1].raw+2||p->points[i].volts<=p->points[i-1].volts)) return -1;
     }
-    e->profiles[ch][range]=*p; return 0;
+    e->profiles[ch]=*p; return 0;
 }
 void engine_coefficients(const engine_t *e,unsigned ch,unsigned range,cs_coefficients_t *out) {
-    const cal_profile_t *p=&e->profiles[ch][range];
+    const cal_profile_t *p=&e->profiles[ch];
     out->channel=ch;out->range=range;out->version=p->version;
     if(p->linear) { out->source=1;out->a=p->gain;out->b=-p->zero*p->gain; }
     else if(p->count) { out->source=2;out->a=NAN;out->b=NAN; }
-    else { out->source=0;out->a=(3.3f/4095.f)*(range?6.17f:1.47f);out->b=-3.3f*.47f; }
+    else { out->source=0;out->a=(3.3f/4095.f)*6.17f;out->b=-3.3f*.47f; }
 }
-static float convert(const cal_profile_t *p,uint16_t raw,unsigned range,uint16_t *q) {
+static float convert(const cal_profile_t *p,uint16_t raw,uint16_t *q) {
     if(p->linear) return (raw-p->zero)*p->gain;
-    /* R1=100k to VREF, R3=47k to input; R2=10k to GND when OD low.
-     * Vin = Vadc*(1+R3/R1+[R3/R2]) - VREF*(R3/R1).
+    /* R1=100k to VREF, R3=47k to input; R2=10k permanently to GND.
+     * Vin = Vadc*(1+R3/R1+R3/R2) - VREF*(R3/R1).
      * Assume VREF=VDDA=3.3 V until measured calibration replaces this model. */
-    if(!p->count) { *q|=Q_UNCAL; return raw*(3.3f/4095.f)*(range?6.17f:1.47f)-3.3f*.47f; }
+    if(!p->count) { *q|=Q_UNCAL; return raw*(3.3f/4095.f)*6.17f-3.3f*.47f; }
     if(raw<p->points[0].raw||raw>p->points[p->count-1].raw) { *q|=Q_OUTSIDE|Q_UNCAL; return NAN; }
     for(unsigned i=1;i<p->count;i++) if(raw<=p->points[i].raw) {
         cal_point_t a=p->points[i-1],b=p->points[i]; return a.volts+(b.volts-a.volts)*(raw-a.raw)/(b.raw-a.raw);
     }
     return NAN;
 }
-void engine_range(engine_t *e,unsigned ch,unsigned range,uint64_t now,uint32_t settle) {
-    e->range[ch]=(uint8_t)range; e->settle_until[ch]=now+settle;
-    memset(&e->windows[ch],0,sizeof(e->windows[ch])); engine_event(e,255,EV_RANGE,(ch<<8)|range,now);
-}
 void engine_analog(engine_t *e,const uint16_t raw[8],uint64_t t) {
     if(!e->capture) return;
     for(unsigned c=0;c<8;c++) {
-        analog_window_t *w=&e->windows[c]; unsigned range=e->range[c];
+        analog_window_t *w=&e->windows[c]; unsigned range=1;
         if(!w->count) w->start=t;
         w->sum+=raw[c]; w->sum2+=(float)raw[c]*raw[c];
         if(raw[c]<=2||raw[c]>=4093) w->quality|=Q_CLIP;
         if(t<e->settle_until[c]) w->quality|=Q_SETTLE;
-        w->volts+=convert(&e->profiles[c][range],raw[c],range,&w->quality);
+        w->volts+=convert(&e->profiles[c],raw[c],&w->quality);
         if(++w->count==16) {
             float mean=w->sum/16.f, volts=w->volts/16.f, var=w->sum2/16.f-mean*mean;
-            if(volts<0||volts>(range?15.f:3.3f)) w->quality|=Q_RANGE;
+            if(volts<0||volts>15.f) w->quality|=Q_RANGE;
             if(w->quality&(Q_SETTLE|Q_OUTSIDE)) volts=NAN;
-            cs_adc_t v={w->start,(uint8_t)c,(uint8_t)range,w->quality,mean,sqrtf(var>0?var:0),volts,e->profiles[c][range].version};
+            cs_adc_t v={w->start,(uint8_t)c,(uint8_t)range,w->quality,mean,sqrtf(var>0?var:0),volts,e->profiles[c].version};
             if(e->enabled[c]) e->emit(CS_ADC,&v,sizeof(v),e->context);
             memset(w,0,sizeof(*w));
         }

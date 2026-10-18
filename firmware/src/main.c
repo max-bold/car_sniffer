@@ -60,11 +60,8 @@ static void clock_init(void) {
     check(HAL_RCC_ClockConfig(&c,FLASH_LATENCY_5));
 }
 static void io_init(void) {
-    __HAL_RCC_GPIOA_CLK_ENABLE();__HAL_RCC_GPIOB_CLK_ENABLE();__HAL_RCC_GPIOC_CLK_ENABLE();__HAL_RCC_GPIOD_CLK_ENABLE();
-    /* Preload low before enabling OD: no software-created unity-range pulse. Reset Hi-Z remains a hardware limitation. */
-    HAL_GPIO_WritePin(BOARD_RANGE_PORT,BOARD_RANGE_PINS,GPIO_PIN_RESET);
-    GPIO_InitTypeDef g={.Pin=BOARD_RANGE_PINS,.Mode=GPIO_MODE_OUTPUT_OD,.Pull=GPIO_NOPULL,.Speed=GPIO_SPEED_FREQ_LOW};
-    HAL_GPIO_Init(BOARD_RANGE_PORT,&g);
+    __HAL_RCC_GPIOA_CLK_ENABLE();__HAL_RCC_GPIOB_CLK_ENABLE();__HAL_RCC_GPIOC_CLK_ENABLE();
+    GPIO_InitTypeDef g={.Mode=GPIO_MODE_ANALOG,.Pull=GPIO_NOPULL,.Speed=GPIO_SPEED_FREQ_LOW};
     g.Pin=BOARD_ADC_PORT_A_PINS;g.Mode=GPIO_MODE_ANALOG;HAL_GPIO_Init(GPIOA,&g);
     g.Pin=BOARD_ADC_PORT_C_PINS;HAL_GPIO_Init(GPIOC,&g);
     g.Pin=BOARD_CAN_A_PINS|BOARD_CAN_B_PINS;g.Mode=GPIO_MODE_AF_PP;g.Alternate=BOARD_CAN_AF;g.Speed=GPIO_SPEED_FREQ_VERY_HIGH;g.Pull=GPIO_NOPULL;
@@ -177,6 +174,9 @@ static void send_status(uint64_t now) {
     for(unsigned s=0;s<2;s++)st.mode[s]=mode[s]|((can[s].Instance->ESR&7)<<4);
     memcpy(st.rate,engine.rate,sizeof(st.rate));memcpy(st.counters,engine.counter,sizeof(st.counters));emit(CS_STATUS,&st,sizeof(st),NULL);
 }
+#ifdef CS_PHYSICAL_CAN_TEST
+#include "physical_can_test.h"
+#endif
 static void command(uint8_t kind,uint32_t seq,const uint8_t *p,uint16_t n,void *ctx) {
     (void)seq;(void)ctx;if(kind!=CS_COMMAND||n<5) return;
     uint32_t request=cs_u32(p);uint8_t cmd=p[4],result=0;const uint8_t *a=p+5;unsigned len=n-5;uint64_t now=micros();
@@ -200,17 +200,17 @@ static void command(uint8_t kind,uint32_t seq,const uint8_t *p,uint16_t n,void *
         else { engine_capture(&engine,a[0],now);for(unsigned c=0;c<8;c++)analog_after[c]=now; }
         break;
     case CMD_CHANNEL:
-        if(len!=3||a[0]>=8||a[1]>1||a[2]>1) result=1;
-        else { unsigned c=a[0];engine.enabled[c]=a[1];if(engine.range[c]!=a[2]) { board_range(c,a[2]);engine_range(&engine,c,a[2],now,BOARD_SETTLING_US);analog_after[c]=now; } }
+        if(len!=3||a[0]>=8||a[1]>1||a[2]!=1) result=1;
+        else engine.enabled[a[0]]=a[1];
         break;
     case CMD_PROFILE:
-        if(len<7||a[0]>=8||a[1]>1||a[6]>32||len!=7u+a[6]*6u) { result=1;break; }
+        if(len<7||a[0]>=8||a[1]!=1||a[6]>32||len!=7u+a[6]*6u) { result=1;break; }
         { cal_profile_t profile={.version=cs_u32(a+2),.count=a[6]};for(unsigned i=0;i<profile.count;i++) { profile.points[i].raw=cs_u16(a+7+i*6);memcpy(&profile.points[i].volts,a+9+i*6,4); }
           result=engine_profile(&engine,a[0],a[1],&profile)?1:0;
           if(!result) { analog_after[a[0]]=now;memset(&engine.windows[a[0]],0,sizeof(engine.windows[a[0]])); } }
         break;
     case CMD_LINEAR_PROFILE:
-        if(len!=14||a[0]>=8||a[1]>1) { result=1;break; }
+        if(len!=14||a[0]>=8||a[1]!=1) { result=1;break; }
         { cal_profile_t profile={.version=cs_u32(a+2),.linear=1};
           memcpy(&profile.zero,a+6,4);memcpy(&profile.gain,a+10,4);
           result=engine_profile(&engine,a[0],a[1],&profile)?1:0;
@@ -224,11 +224,16 @@ static void command(uint8_t kind,uint32_t seq,const uint8_t *p,uint16_t n,void *
         if(len||engine.capture||engine.bridge) result=2;
         else { calibration_load(&engine);memset(engine.windows,0,sizeof(engine.windows)); }
         break;
+    case CMD_RESET_CALIBRATION:
+        if(len||engine.capture||engine.bridge) result=2;
+        else if(calibration_reset()) result=1;
+        else { calibration_load(&engine);memset(engine.windows,0,sizeof(engine.windows)); }
+        break;
     case CMD_READ_COEFFICIENTS:
         if(len) { result=1;break; }
-        { cs_coefficients_t values[16];
-          for(unsigned c=0;c<8;c++)for(unsigned r=0;r<2;r++) {
-              cs_coefficients_t *v=&values[c*2+r];v->request=request;engine_coefficients(&engine,c,r,v);emit(CS_COEFFICIENTS,v,sizeof(*v),NULL);
+        { cs_coefficients_t values[8];
+          for(unsigned c=0;c<8;c++) {
+              cs_coefficients_t *v=&values[c];v->request=request;engine_coefficients(&engine,c,1,v);emit(CS_COEFFICIENTS,v,sizeof(*v),NULL);
           }
           }
         break;
@@ -239,7 +244,11 @@ static void command(uint8_t kind,uint32_t seq,const uint8_t *p,uint16_t n,void *
         if(len) result=1;else memset(engine.counter,0,sizeof(engine.counter));break;
     case CMD_LOOPBACK:
         if(len!=1||a[0]>1||engine.bridge||auto_active[0]||auto_active[1]) { result=2;break; }
+#ifdef CS_PHYSICAL_CAN_TEST
+        result=physical_can_test(a[0]);break;
+#else
         { unsigned s=a[0];abort_side(s,now);can_config(s,engine.rate[s],2);CAN_TxHeaderTypeDef h={.StdId=0x321,.IDE=CAN_ID_STD,.RTR=CAN_RTR_DATA,.DLC=8};uint8_t data[8]={0x43,0x53,1,2,3,4,5,6};uint32_t mailbox;result=HAL_CAN_AddTxMessage(&can[s],&h,data,&mailbox)!=HAL_OK;engine_event(&engine,s,EV_LOOPBACK,0,now); }break;
+#endif
     default:result=1;
     }
     uint8_t reply[14];memcpy(reply,&request,4);reply[4]=cmd;reply[5]=result;memcpy(reply+6,&now,8);emit(CS_RESPONSE,reply,sizeof(reply),NULL);
@@ -308,7 +317,7 @@ int main(void) {
                 for(unsigned c=0;c<8;c++)if(t<analog_after[c])engine.enabled[c]=0;
                 engine_analog(&engine,adc_copy[slot][i],t);memcpy(engine.enabled,enable,8);
                 for(unsigned c=0;c<8;c++)if(t<analog_after[c])memset(&engine.windows[c],0,sizeof(engine.windows[c]));
-                if(t<raw_until&&t>=analog_after[raw_channel]) { cs_raw_t v={t,raw_channel,engine.range[raw_channel],adc_copy[slot][i][raw_channel]};emit(CS_RAW,&v,sizeof(v),NULL); }
+                if(t<raw_until&&t>=analog_after[raw_channel]) { cs_raw_t v={t,raw_channel,1,adc_copy[slot][i][raw_channel]};emit(CS_RAW,&v,sizeof(v),NULL); }
             }
             __DMB();adc_read++;
         }

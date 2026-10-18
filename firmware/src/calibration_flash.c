@@ -5,11 +5,11 @@
 
 /* STM32F407VE sectors 6/7, excluded from the application linker region.
  * Inactive slot is erased; commit word is programmed last. No mass erase. */
-#define CAL_MAGIC 0x314c4143u
+#define CAL_MAGIC 0x324c4143u /* CAL2: fixed-divider circuit, ignore legacy CAL1 */
 #define CAL_COMMIT 0x434f4d54u
 typedef struct {
     uint32_t magic,generation,size;
-    cal_profile_t profiles[8][2];
+    cal_profile_t profiles[8];
     uint32_t crc,commit;
 } record_t;
 static record_t staging;
@@ -27,15 +27,15 @@ static int newest(void) {
 void calibration_load(engine_t *e) {
     memset(e->profiles,0,sizeof(e->profiles));
     int slot=newest();if(slot<0)return;
-    for(unsigned c=0;c<8;c++)for(unsigned r=0;r<2;r++)
-        engine_profile(e,c,r,&slots[slot]->profiles[c][r]);
+    for(unsigned c=0;c<8;c++)
+        engine_profile(e,c,1,&slots[slot]->profiles[c]);
 }
-int calibration_save(const engine_t *e) {
-    for(unsigned c=0;c<8;c++)for(unsigned r=0;r<2;r++)if(!e->profiles[c][r].linear)return -1;
+static int write_record(const engine_t *e) {
     int previous=newest(),next=previous==0?1:0;
     memset(&staging,0,sizeof(staging));staging.magic=CAL_MAGIC;
     staging.generation=previous<0?1:slots[previous]->generation+1;
-    staging.size=sizeof(staging);memcpy(staging.profiles,e->profiles,sizeof(e->profiles));
+    staging.size=sizeof(staging);
+    if(e)memcpy(staging.profiles,e->profiles,sizeof(e->profiles));
     staging.crc=cs_crc32((const uint8_t *)&staging,offsetof(record_t,crc));staging.commit=CAL_COMMIT;
     FLASH_EraseInitTypeDef erase={.TypeErase=FLASH_TYPEERASE_SECTORS,.Sector=next?FLASH_SECTOR_7:FLASH_SECTOR_6,.NbSectors=1,.VoltageRange=FLASH_VOLTAGE_RANGE_3};
     uint32_t error;int failed=0;
@@ -50,4 +50,13 @@ int calibration_save(const engine_t *e) {
     }
     HAL_FLASH_Lock();
     return failed||!valid(slots[next])?-1:0;
+}
+int calibration_save(const engine_t *e) {
+    for(unsigned c=0;c<8;c++)if(!e->profiles[c].linear)return -1;
+    return write_record(e);
+}
+int calibration_reset(void) {
+    /* Commit an empty newest record: boot restores factory defaults, while
+     * interruption before commit preserves the previously active record. */
+    return write_record(NULL);
 }

@@ -10,29 +10,38 @@ All wiring choices are in `firmware/include/board.h`. STM32F407VET6, LQFP100. Pi
 | CAN B TX | PB13 | 52 | AF9 CAN2_TX, FT | TJA1050 B TXD, 3.3 V push-pull |
 | USB D- | PA11 | 70 | AF10 OTG_FS | Board USB-SLAVE, 22 ohm series |
 | USB D+ | PA12 | 71 | AF10 OTG_FS | Board USB-SLAVE, 22 ohm series, external 1.5 kohm pull-up |
-| AIN1 | PA1 | 23 | ADC1_IN1 | Divider MCU_ADC, 0..VDDA only |
-| AIN2 | PA2 | 24 | ADC1_IN2 | Same |
-| AIN3 | PA3 | 25 | ADC1_IN3 | Same |
-| AIN4 | PA4 | 29 | ADC1_IN4 | Same; DAC disabled |
-| AIN5 | PA5 | 30 | ADC1_IN5 | Same; DAC disabled |
-| AIN6 | PC0 | 15 | ADC1_IN10 | Same |
-| AIN7 | PC1 | 16 | ADC1_IN11 | Same |
-| AIN8 | PC2 | 17 | ADC1_IN12 | Same |
-| AIN1 range | PD8 | 55 | GPIO OD, FT | R2 lower end, low=divided, released=R2 disconnected (biased input) |
-| AIN2 range | PD9 | 56 | GPIO OD, FT | Same |
-| AIN3 range | PD10 | 57 | GPIO OD, FT | Same |
-| AIN4 range | PD11 | 58 | GPIO OD, FT | Same |
-| AIN5 range | PD12 | 59 | GPIO OD, FT | Same |
-| AIN6 range | PD13 | 60 | GPIO OD, FT | Same |
-| AIN7 range | PD14 | 61 | GPIO OD, FT | Same |
-| AIN8 range | PD15 | 62 | GPIO OD, FT | Same |
+| AIN4 | PA1 | 23 | ADC1_IN1 | Divider MCU_ADC, 0..VDDA only |
+| AIN5 | PA2 | 24 | ADC1_IN2 | Same |
+| AIN6 | PA3 | 25 | ADC1_IN3 | Same |
+| AIN7 | PA4 | 29 | ADC1_IN4 | Same; DAC disabled |
+| AIN8 | PA5 | 30 | ADC1_IN5 | Same; DAC disabled |
+| AIN1 | PC0 | 15 | ADC1_IN10 | Same |
+| AIN2 | PC1 | 16 | ADC1_IN11 | Same |
+| AIN3 | PC2 | 17 | ADC1_IN12 | Same |
 | SWD | PA13 / PA14 | 72 / 76 | SWDIO / SWCLK | Preserved; common GND, ST-Link power output disconnected when USB powers board |
 
 PB8/PB12 are FT digital inputs in the selected AF, not analog inputs. STM32 internal pulls are disabled; DS8626 Table 48 note 5 requires this above VDD+0.3 V. Do not drive 5 V RXD into an unpowered MCU: the FT absolute input limit is VDD+4 V, so 5 V violates it at VDD=0. Power the MCU before the transceivers or isolate their RXD during power sequencing. Board/module grounds must be common on an unisolated bench. FT does not imply automotive surge tolerance.
 
 NXP TJA1050 TXD thresholds are VIH >=2.0 V and VIL <=0.8 V, compatible with 3.3 V STM32 GPIO at the small TXD load. TJA1050 supply must be 4.75..5.25 V. Verify actual module part and pinout; do not substitute CANH/CANL for RXD/TXD. Verify its S input is strapped for the intended mode. Silent behavior here comes from bxCAN, not an assumed module S setting.
 
-PD8..PD15 are FT open-drain, no pulls; writing zero sinks, writing one releases. The revised input has R1=100k to VREF, R3=47k from AIN and R2=10k to the range GPIO. Low enables R2, Hi-Z releases it; both modes have VREF bias. See `calibration.md` for nominal zero/gain. They overlap LCD signals; a fitted LCD would conflict. Low is preloaded before output enable at firmware startup. **During reset these pins are Hi-Z, so hardware does not guarantee a safe 0..15 V range.** Fixing this requires external hardware; firmware cannot remove that interval. Keep analog inputs disconnected until protection is verified. A nominal 3.3 V shunt diode does not guarantee ADC pin safety at actual current or during power loss; D1/D2 types and measurements are still required.
+## Fixed analog divider
+
+Each ADC node connects to AIN through R3=47k, to VREF+ through R1=100k, to GND through R2=10k and to GND through C1=1nF. **Connect the lower end of every R2 directly to board GND. Disconnect the old PD8..PD15 connections.** These GPIOs are unused and are not configured or driven by this firmware. Analog input/channel ordering above is unchanged.
+
+The single nominal input range is 0..15 V. With VREF=VDDA=3.3 V, `Vin = 6.17*Vadc - 1.551 V`; one ADC count corresponds to approximately4.97 mV at AIN. R2 remains grounded during reset; there is no GPIO-controlled divider transition.
+
+The BZX55C3V3 shunt zeners are removed because they distorted the high-impedance input. Schottky protection has not been fitted. The resistor divider alone does not establish protection against negative inputs, overvoltage, transients or signals applied while the MCU is unpowered. The ADC node must stay within its electrical limits. Physical protection and accuracy remain bench work.
+
+### VREF connection for analog input bias
+
+According to sheet 1 of [STM32_F4VE_SCHEMATIC.PDF](../STM32_F4VE_SCHEMATIC.PDF), connect the VREF end of each external R1=100k bias resistor (one per analog channel) to **J2 pin 20, VREF+**. This is an external resistor connection, not an MCU GPIO pull-up.
+
+| Header contact | Signal | Connection on the board |
+|---|---|---|
+| J2 pin 20 | VREF+ | MCU pin 21; connected through R11=0 ohm to VDDA, then through R34=0 ohm to 3V3 |
+| J2 pin 19 | VREF- | MCU pin 20; connected through R35=0 ohm to GND |
+
+VREF+ is therefore nominally 3.3 V from the board supply, not a separate precision reference or the internal VREFINT source. Use the connector pin numbers in the schematic to identify the contacts on the actual board.
 
 ## Clock and timing
 
@@ -49,9 +58,11 @@ CAN: 42 MHz / prescaler / 14 TQ; synchronization 1 TQ, BS1=11, BS2=2, SJW=1, sam
 | 500 | 6 | 500 | 0 |
 | 1000 | 3 | 1000 | 0 |
 
-ADC1 clock=21 MHz (PCLK2/4), sample time initially 480 cycles plus 12 conversion cycles: about 23.43 us per channel, 187.43 us per eight-channel scan. TIM2 TRGO at exactly 1600 Hz (84 MHz / 52500). 16 scans produce one 10 ms window, 100 points/s/channel. Channels are scanned in table order, not simultaneously; timestamps identify the common window start/scan trigger, with channel offsets of approximately rank*23.43 us, not measured sample aperture. TIM5 is a 1 MHz 32-bit counter extended to 64 bits by its update ISR.
+ADC1 clock=21 MHz (PCLK2/4), sample time initially 480 cycles plus 12 conversion cycles: about 23.43 us per channel, 187.43 us per eight-channel scan. TIM2 TRGO at exactly 1600 Hz (84 MHz / 52500). 16 scans produce one 10 ms window, 100 points/s/channel. Scan order is logical AIN1..AIN8: PC0, PC1, PC2, PA1, PA2, PA3, PA4, PA5 (ADC channels 10,11,12,1,2,3,4,5), not simultaneous. Timestamps identify the common window start/scan trigger, with channel offsets of approximately zero-based rank*23.43 us, not measured sample aperture. TIM5 is a 1 MHz 32-bit counter extended to 64 bits by its update ISR.
 
-Revised R1=100k/R2=10k/R3=47k/C1=1nF network: approximate RC constants 7.6 us divided and 32 us released, excluding diode/ADC effects; see `calibration.md`. Sample time and `BOARD_SETTLING_US=20000` are provisional hardware parameters. Verify charge settling at the actual impedance, leakage, temperature and range transition. DMA2 Stream0/Channel0 buffers are in normal SRAM, never CCM.
+Stored calibration is indexed by logical channel. The fixed-divider firmware uses a new CAL2 record format and ignores CAL1 calibration from the former switching circuit. Updating the application preserves sectors6/7; new coefficients require fresh GND/10 V calibration.
+
+R1=100k/R2=10k/R3=47k/C1=1nF gives an approximate7.6 us RC constant, excluding ADC/source effects. ADC sample time and startup settling (`BOARD_SETTLING_US=20000`) remain provisional bench parameters. DMA2 Stream0/Channel0 buffers stay in normal SRAM, never CCM.
 
 ## Termination and limitations
 

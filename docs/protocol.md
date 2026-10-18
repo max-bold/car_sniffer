@@ -28,17 +28,18 @@ Command prefix `request_id:uint32, command:uint8`. The table lists remaining arg
 | CAN configuration | 2 | side:u8, bitrate:u32 (0=Auto; 83333,100000,125000,250000,500000,1000000) |
 | Bridge | 3 | enable:u8, 0/1 |
 | Capture | 4 | enable:u8, 0/1 |
-| Channel | 5 | channel:u8 0..7, enable:u8, range:u8 0=3.3V,1=15V |
-| Profile | 6 | channel:u8, range:u8, version:u32, count:u8 2..32, then count * (raw:u16,volts:f32) |
-| Linear profile | 10 | channel:u8, range:u8, version:u32, zero:f32, gain:f32 (14 bytes); RAM staging, zero strictly between2 and4093, positive gain<=0.1 |
-| Save calibration | 11 | none; bridge/capture off and all16 linear profiles required; commits dual-copy Flash, responds after readback |
+| Channel | 5 | channel:u8 0..7, enable:u8, range:u8 must be1 (fixed0–15V) |
+| Profile | 6 | channel:u8, range:u8 must be1, version:u32, count:u8 2..32, then count * (raw:u16,volts:f32) |
+| Linear profile | 10 | channel:u8, range:u8 must be1, version:u32, zero:f32, gain:f32 (14 bytes); RAM staging, zero strictly between2 and4093, positive gain<=0.1 |
+| Save calibration | 11 | none; bridge/capture off and all8 linear profiles required; commits dual-copy Flash, responds after readback |
 | Reload calibration | 12 | none; bridge/capture off; discard staging and reload Flash or nominal defaults |
-| Read coefficients | 13 | none; returns16 COEFFICIENTS records and a normal response (either may arrive first; match request ID and await both); read-only active-profile query |
+| Read coefficients | 13 | none; returns8 COEFFICIENTS records and a normal response (either may arrive first; match request ID and await both); read-only active-profile query |
+| Reset calibration | 14 | none; bridge/capture off; atomically commits a newer factory-default record in the inactive calibration slot, then reloads it into RAM; response after Flash verification; no reset required |
 | Raw session | 7 | channel:u8, duration_ms:u16 0..10000, zero cancels |
 | Clear counters | 8 | none; leaves capture/bridge/GUI results alone |
 | Internal loopback self-test | 9 | side:u8; bridge and Auto must be off; sends fixed ID 321/data 43 53 01 02 03 04 05 06 in **silent loopback**, restores silent mode |
 
-Response: `request_id:u32, command:u8, result:u8, applied_boundary_us:u64` (14 bytes). Profile update, capture and range boundaries exclude queued pre-command ADC samples; boundary is application time, not host receipt time. Capture stop leaves packets collected before the boundary in the telemetry queue, followed by EV_CAPTURE; GUI displays these already collected results. Clear results is local and sends no MCU reset/counter command.
+Response: `request_id:u32, command:u8, result:u8, applied_boundary_us:u64` (14 bytes). Profile update and capture boundaries exclude queued pre-command ADC samples; boundary is application time, not host receipt time. Capture stop leaves packets collected before the boundary in the telemetry queue, followed by EV_CAPTURE; GUI displays these already collected results. Clear results is local and sends no MCU reset/counter command.
 
 ## Record layouts
 
@@ -63,7 +64,9 @@ CAN state byte: low two bits 0=silent,1=normal,2=silent-loopback; bits 4/5/6 are
 
 Event codes: 1 LEC(detail 1 stuff,2 form,3 ACK,4 recessive bit,5 dominant bit,6 CRC); 2 state(detail ESR low 3 bits); 3 RX loss; 4 TX queue overflow(detail original frame_id); 5 expiry(frame_id); 6 USB loss(count); 7 recovery(attempt 1..3,0 restored); 8 bridge stopped; 9 range(channel<<8|range); 10 DMA loss(block count); 11 capture(enable); 12 loopback(0 started,1 received); 13 RX records discarded by reconfiguration(count). Controller-level LEC is not falsely attached to a specific frame.
 
-ADC quality bitmask: 1 uncalibrated,2 clipping on any raw sample,4 settling,8 outside selected voltage range,16 outside table,32 DMA loss (reserved for individual point tagging; current implementation reports dropped DMA blocks as events and breaks windows). Invalid settling/outside-table values carry NaN. Nominal voltage uses 3.3/4095 * raw * (1 or 5), never 15/3.3.
+The fixed-divider circuit always emits range=1 in ADC/RAW/COEFFICIENTS. Range0 commands are rejected; command5 only controls channel enable. There are no GPIO range transitions. CAL2 Flash stores eight profiles and does not load the previous circuit's CAL1 records.
+
+ADC quality bitmask: 1 uncalibrated,2 clipping on any raw sample,4 settling,8 outside selected voltage range,16 outside table,32 DMA loss (reserved for individual point tagging; current implementation reports dropped DMA blocks as events and breaks windows). Invalid settling/outside-table values carry NaN. Nominal conversion is `6.17 * raw * 3.3/4095 - 1.551` volts.
 
 Auto stage 0 trying,1 found,2 not determined. Raw is one selected channel at 1600 samples/s for at most 10 s. Normal eight-channel scans and CAN operation continue.
 

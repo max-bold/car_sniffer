@@ -15,18 +15,18 @@
 - Check `docs/pinout.md` before assigning pins. The board uses an 8 MHz HSE and USB-SLAVE; its external D+ pull-up requires the implemented USB disconnect pulse on initialization.
 - Reset defaults: bridge off, CAN silent, capture off. Bitrate confirmation is explicit; Auto listens silently and must not guess on a quiet bus.
 - CAN forwarding must remain independent of capture, display filters, Clear results and USB availability. Keep bounded queues, deadlines, visible loss counters and bounded recovery attempts.
-- The analog range GPIO is open-drain: low enables R2=10k, Hi-Z releases R2. Revised input: R1=100k to VREF, R3=47k; scale factors 6.17 and 1.47, intercept -0.47*VREF. Reset is Hi-Z; do not describe the divider as safe for 15 V during reset. Analog protection and accuracy remain bench work.
+- Analog inputs have a fixed 0..15 V range: R3=47k from AIN, R1=100k to VREF and R2=10k permanently to GND, C1=1nF. PD8..PD15 are disconnected and unused. Nominal conversion is 6.17*Vadc - 0.47*VREF. Shunt zeners are removed; Schottky diodes are not fitted. Input fault/power-off protection and accuracy remain bench work.
 - Internal CAN loopback is not evidence of physical delivery, ACK, arbitration or transceiver operation. Do not connect TX outputs together for an improvised CAN bus.
 - Discover the connected COM port; COM8 is a recorded observation, not a permanent identity. Avoid hardware commands while the GUI owns the port. Leave bench tests with bridge off, CAN silent and capture off.
 
 ## Desktop behavior and design
 
-- Preserve the owner's layout: graphs and CAN each occupy half the main area; CAN A and B are two columns side by side. General controls and CAN filters are in the 190 px right sidebar; channel/range checkboxes are left of the plots; status is at the bottom.
+- Preserve the owner's layout: graphs and CAN each occupy half the main area; CAN A and B are two columns side by side. General controls and CAN filters are in the 190 px right sidebar; channel enable checkboxes and voltage readings are left of the plots; status is at the bottom.
 - Maintain readable dark colors, including native Windows caption where supported. No axis titles; time tick labels appear on the bottom plot.
 - Wheel over a plot zooms voltage only; wheel over the time axis zooms time for all linked channels. Capture follows the newest data while preserving the selected span. Stopped plots permit browsing without timer updates resetting their view.
 - Keep acquisition outside the Qt thread and memory bounded. Current limits: 20000 CAN rows per side, 6000 analog points per channel, 4096 queued protocol envelopes and 16000 raw calibration samples. Any limit change must update documentation and related controls.
 - Capture stop does not stop the bridge; Clear results only clears the display. Keep these semantics explicit.
-- C and Python packet formats must agree. Only the standalone `calibrate.bat` utility measures/uploads/persists calibration. Firmware applies it before averaging and restores dual CRC-protected Flash slots at boot; the main app must not read/upload calibration. Wizard steps: GND both modes, about 2.0 V released, about 10.0 V divided, with editable actual multimeter readings. Preserve reserved slots during firmware updates.
+- C and Python packet formats must agree. Only the standalone `calibrate.bat` utility measures/uploads/persists calibration. Firmware applies it before averaging and restores dual CRC-protected Flash slots at boot; the main app must not read/upload calibration. Wizard steps: GND, then about 10.0 V, with editable actual multimeter reading. Eight CAL2 profiles replace the old circuit's sixteen CAL1 profiles; old records are preserved but ignored. Wire range fields remain fixed at1. Preserve reserved slots during firmware updates.
 
 ## Validation and Git
 
@@ -35,4 +35,4 @@
 - Keep `README.md` and behavior/protocol/pinout documentation aligned with changes. High-load repaint performance is a measured limitation, not a guaranteed 25 Hz.
 - Before committing, inspect the staged paths and diff. Exclude virtual environments, build output, vendor trees, local flash backups and temporary files. Never force-push or discard unrelated owner changes as routine cleanup.
 
-- Main GUI labels the range checkbox `DIV`, omits calibration/factory-default information, and excludes capture/range/USB service events from CAN tables. Keep CAN fault events. The standalone wizard reads current coefficients from firmware and displays `y=a*x+b` with x=raw*3.3/4095 volts and ranges `div off` / `div on`; factory defaults are an intentional valid model.
+- Main GUI has no DIV control, omits calibration/factory-default information, and excludes capture/range/USB service events from CAN tables. Keep CAN fault events. The standalone wizard reads eight current coefficients from firmware and displays y=a*x+b with x=raw*3.3/4095 volts; factory defaults a=6.17, b=-1.551 are an intentional valid model.

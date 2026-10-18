@@ -15,7 +15,6 @@ class DemoDevice:
         self.capture = self.bridge = False
         self.rates = [500000, 500000]
         self.confirmed = [False, False]
-        self.ranges = [1] * 8
         self.enabled = [True] * 8
         self.counters = [[0] * 8 for _ in range(2)]
         self.sequence = self.frame_id = self.generation = 0
@@ -67,8 +66,8 @@ class DemoDevice:
                 self.bridge = bool(args[0])
         elif command == p.Command.CHANNEL:
             ch, enabled, range_ = args
-            self.enabled[ch], self.ranges[ch] = bool(enabled), range_
-            packets.append(self.packet(p.Kind.EVENT, p.EVENT.pack(now, 255, 9, ch << 8 | range_, 0, 0)))
+            if range_!=1:result=1
+            else:self.enabled[ch]=bool(enabled)
         elif command == p.Command.RAW:
             self.raw_ch, duration = struct.unpack('<BH', args)
             self.last_raw = now
@@ -78,29 +77,35 @@ class DemoDevice:
             ch, range_, version, count = struct.unpack_from('<BBIB', args)
             points = list(struct.iter_unpack('<Hf', args[7:]))
             try:
+                if range_!=1:raise ValueError('Fixed divider requires range=1')
                 self.profiles[ch, range_] = Profile(ch, range_, version, points).validate()
             except ValueError:
                 result = 1
         elif command == p.Command.LINEAR_PROFILE:
             from .calibration import LinearProfile
             ch,r,version,zero,gain=struct.unpack('<BBIff',args)
-            try:self.profiles[ch,r]=LinearProfile(ch,r,version,zero,gain).validate()
+            try:
+                if r!=1:raise ValueError('Fixed divider requires range=1')
+                self.profiles[ch,r]=LinearProfile(ch,r,version,zero,gain).validate()
             except ValueError:result=1
         elif command == p.Command.SAVE_CALIBRATION:
-            if self.capture or self.bridge or len(self.profiles)!=16:result=2
+            if self.capture or self.bridge or len(self.profiles)!=8:result=2
             else:self.saved_profiles=dict(self.profiles)
         elif command == p.Command.RELOAD_CALIBRATION:
             if self.capture or self.bridge:result=2
             else:self.profiles=dict(self.saved_profiles)
+        elif command == p.Command.RESET_CALIBRATION:
+            if args or self.capture or self.bridge:result=2
+            else:self.profiles.clear();self.saved_profiles.clear()
         elif command == p.Command.READ_COEFFICIENTS:
             from .calibration import LinearProfile
             values=[]
             for ch in range(8):
-                for r in range(2):
+                for r in (1,):
                     profile=self.profiles.get((ch,r))
                     if isinstance(profile,LinearProfile):source,version,a,b=1,profile.version,profile.gain,-profile.zero*profile.gain
                     elif profile:source,version,a,b=2,profile.version,float('nan'),float('nan')
-                    else:source,version,a,b=0,0,(1.47,6.17)[r]*3.3/4095,-1.551
+                    else:source,version,a,b=0,0,6.17*3.3/4095,-1.551
                     values.append(p.COEFFICIENTS.pack(request,ch,r,source,version,a,b))
             packets.append(self.packet(p.Kind.COEFFICIENTS,b''.join(values)))
         elif command == p.Command.CLEAR_COUNTERS:
@@ -143,18 +148,18 @@ class DemoDevice:
                 for ch in range(8):
                     if not self.enabled[ch]:
                         continue
-                    volts = (1.5 + math.sin(t / 1e6 * (ch + 1) * .7)) * (3 if self.ranges[ch] else 1)
-                    raw = (volts+3.3*.47) / (6.17 if self.ranges[ch] else 1.47) / 3.3 * 4095
-                    profile = self.profiles.get((ch, self.ranges[ch]))
+                    volts = (1.5 + math.sin(t / 1e6 * (ch + 1) * .7)) * 3
+                    raw = (volts+3.3*.47) / 6.17 / 3.3 * 4095
+                    profile = self.profiles.get((ch, 1))
                     q, version = p.Quality.UNCALIBRATED, 0
                     if profile:
                         converted, outside = profile.convert([raw])
                         volts = float(converted[0]); q = p.Quality.OUTSIDE_PROFILE if outside[0] else 0; version = profile.version
-                    adc_data.extend(p.ADC.pack(t, ch, self.ranges[ch], q, raw, 1., volts, version))
+                    adc_data.extend(p.ADC.pack(t, ch, 1, q, raw, 1., volts, version))
         for _ in range(min(400, max(0, (min(now, self.raw_end) - self.last_raw) // 625))):
             self.last_raw += 625
             v = 1.5 + math.sin(self.last_raw / 1e6 * 2 * math.pi * 5)
-            raw_data.extend(p.RAW.pack(self.last_raw, self.raw_ch, self.ranges[self.raw_ch], round(v / 3.3 * 4095)))
+            raw_data.extend(p.RAW.pack(self.last_raw, self.raw_ch, 1, round(v / 3.3 * 4095)))
         for kind, layout, data in ((p.Kind.CAN_RX, p.CAN, can_data), (p.Kind.TX_STATUS, p.TX, tx_data),
                                    (p.Kind.ADC, p.ADC, adc_data), (p.Kind.RAW, p.RAW, raw_data)):
             size = p.MAX_PAYLOAD // layout.size * layout.size

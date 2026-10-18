@@ -36,6 +36,7 @@ class Command(IntEnum):
     SAVE_CALIBRATION = 11
     RELOAD_CALIBRATION = 12
     READ_COEFFICIENTS = 13
+    RESET_CALIBRATION = 14
 
 class Quality(IntFlag):
     FACTORY_DEFAULTS = 1

@@ -1,10 +1,17 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 import time
+import json
+import pytest
 from PySide6 import QtCore
-from PySide6.QtWidgets import QApplication
-from desktop.gui import MainWindow, FrameModel, FrameFilter
+from PySide6.QtWidgets import QApplication, QMenu
+from desktop.gui import MainWindow, FrameModel, FrameFilter, CanPanel
 from desktop import protocol as p
+
+@pytest.fixture(scope='module', autouse=True)
+def qt_application():
+    app=QApplication.instance() or QApplication([])
+    yield app
 
 def pump(app,seconds):
     end=time.monotonic()+seconds
@@ -21,6 +28,39 @@ def test_model_filters_and_tx():
     proxy.ide=1;proxy.invalidate();assert proxy.rowCount()==1
     model.clear();assert proxy.rowCount()==0
 
+def test_can_header_column_menu():
+    app=QApplication.instance() or QApplication([])
+    panels=[CanPanel('A'),CanPanel('B')]
+    panel=panels[0];panel.show();app.processEvents()
+    def open_menu():
+        panel.table.horizontalHeader().customContextMenuRequested.emit(QtCore.QPoint(10,10))
+        app.processEvents()
+        return panel.table.findChild(QMenu)
+    menu=open_menu()
+    assert [action.text() for action in menu.actions()]==[
+        panel.model.headers[col] for col in (0,1,5,2,3,4,6,7,8,9)]
+    next(action for action in menu.actions() if action.text()=='TX_ACK').trigger()
+    assert panel.table.isColumnHidden(8) and not panels[1].table.isColumnHidden(8)
+    panel.model.append([{'frame_id':1,'id':1,'ide':0,'rtr':0,'event':False,'cells':['']*10}])
+    panel.model.update_tx(1,1,1)
+    assert panel.model.data(panel.model.index(0,8))=='1'
+    panel.ids.setText('1');panel.model.clear()
+    assert panel.table.isColumnHidden(8)
+    menu.close();app.processEvents()
+    menu=open_menu()
+    action=next(action for action in menu.actions() if action.text()=='TX_ACK')
+    assert not action.isChecked()
+    action.trigger();assert not panel.table.isColumnHidden(8)
+    menu.close();app.processEvents()
+    for col in range(1,panel.model.columnCount()):panel.table.setColumnHidden(col,True)
+    menu=open_menu()
+    assert not menu.actions()[0].isEnabled()
+    assert all(action.isEnabled() for action in menu.actions()[1:])
+    menu.close()
+    for widget in panels:
+        widget.close();widget.controls.close();widget.deleteLater();widget.controls.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None,QtCore.QEvent.Type.DeferredDelete)
+
 def test_gui_demo_stop_clear_and_load(tmp_path,monkeypatch):
     monkeypatch.setenv('LOCALAPPDATA',str(tmp_path))
     app=QApplication.instance() or QApplication([])
@@ -31,7 +71,7 @@ def test_gui_demo_stop_clear_and_load(tmp_path,monkeypatch):
     assert all(panel.model.rowCount()>1000 for panel in w.can)
     assert all(len(points)>=50 for points in w.analog)
     assert w.last_status[5:7]==(1,1)
-    assert all(cb.text()=='DIV' and 'factory' not in label.text().lower() and 'uncalibrated' not in label.text().lower() for _,cb,label in w.channels)
+    assert all('factory' not in label.text().lower() and 'uncalibrated' not in label.text().lower() for _,label in w.channels)
     assert not any(row['event'] for panel in w.can for row in panel.model.rows)
     w.time_window.setValue(2.5);pump(app,.15)
     left,right=w.plots[0].viewRange()[0]
@@ -58,3 +98,22 @@ def test_gui_demo_stop_clear_and_load(tmp_path,monkeypatch):
     assert w.worker.dropped==0 and not w.worker.error
     w.grab().save(str(tmp_path/'gui.png'))
     w.close();pump(app,.05)
+
+
+def test_legacy_range_preferences_do_not_change_fixed_divider(monkeypatch):
+    class Settings:
+        def __init__(self,*args):pass
+        def value(self,*args):
+            return json.dumps({'channels':[{'enabled':True,'range':0}]*8,'rates':[500000,500000]})
+        def setValue(self,*args):pass
+    monkeypatch.setattr(QtCore,'QSettings',Settings)
+    app=QApplication.instance() or QApplication([])
+    w=MainWindow(demo=True,demo_fps=0);w.show()
+    try:
+        pump(app,.6)
+        assert w.last_status and not w.pending
+        assert all(len(channel)==2 for channel in w.channels)
+        assert all(plot.viewRange()[1]==[0,15] for plot in w.plots)
+        assert not any(cb.text()=='DIV' for cb in w.findChildren(type(w.channels[0][0])))
+        assert 'rejected' not in w.notice.text().lower()
+    finally:w.close();pump(app,.05)

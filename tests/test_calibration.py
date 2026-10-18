@@ -20,7 +20,22 @@ def test_profiles_and_no_extrapolation(tmp_path):
 def test_dc_rejects_unstable_and_clipped():
     assert dc_point([1000]*160,2)==[1000.,2.]
     with pytest.raises(ValueError):dc_point([4095]*160,3.3)
-    with pytest.raises(ValueError):dc_point([1000,1100]*80,2)
+    with pytest.raises(ValueError):dc_point([1000,1102]*80,2)
+
+def test_dc_accepts_sample_noise_but_rejects_drifting_mean():
+    # 3x measured bench noise, rounded up; mean drift is checked separately.
+    noisy=np.tile([970,1030],800)
+    assert dc_point(noisy,0)==[1000.,0.]
+    with pytest.raises(ValueError,match='raw std'):
+        dc_point(np.tile([969,1031],800),0)
+    # A 14-count block span from the owner's bench must be accepted too.
+    assert dc_point(np.repeat(np.linspace(993,1007,10),160),0)==[1000.,0.]
+    drifting=np.repeat(np.linspace(957.5,1042.5,10),160)
+    assert drifting.std()<30
+    with pytest.raises(ValueError,match='block mean span'):
+        dc_point(drifting,0)
+    profile=linear_profile(0,1,noisy,noisy+2000,10)
+    assert profile.zero==1000 and profile.gain==.005
 
 def test_sine_nonlinearity_phase_delay_noise():
     rng=np.random.default_rng(123)
